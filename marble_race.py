@@ -104,6 +104,73 @@ class Button:
         return False
 
 
+class Slider:
+    """Slider control for adjusting numeric values."""
+    def __init__(self, x, y, width, label, min_val, max_val, initial_val, format_str="{:.1f}"):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = 20
+        self.label = label
+        self.min_val = min_val
+        self.max_val = max_val
+        self.value = initial_val
+        self.format_str = format_str
+        self.font = pygame.font.SysFont("Arial", 14)
+        self.dragging = False
+        self.visible = True
+        self.track_rect = pygame.Rect(x, y + 20, width, 8)
+        self._update_handle()
+
+    def _update_handle(self):
+        """Update handle position based on current value."""
+        ratio = (self.value - self.min_val) / (self.max_val - self.min_val)
+        handle_x = self.x + int(ratio * self.width)
+        self.handle_rect = pygame.Rect(handle_x - 8, self.y + 16, 16, 16)
+
+    def draw(self, screen):
+        if not self.visible:
+            return
+        # Draw label and value
+        label_text = f"{self.label}: {self.format_str.format(self.value)}"
+        label_surf = self.font.render(label_text, True, TEXT_COLOR)
+        screen.blit(label_surf, (self.x, self.y))
+
+        # Draw track
+        pygame.draw.rect(screen, (60, 60, 80), self.track_rect, border_radius=4)
+
+        # Draw filled portion
+        ratio = (self.value - self.min_val) / (self.max_val - self.min_val)
+        filled_width = int(ratio * self.width)
+        filled_rect = pygame.Rect(self.x, self.y + 20, filled_width, 8)
+        pygame.draw.rect(screen, (100, 150, 200), filled_rect, border_radius=4)
+
+        # Draw handle
+        pygame.draw.rect(screen, (200, 200, 220), self.handle_rect, border_radius=4)
+
+    def handle_event(self, event):
+        if not self.visible:
+            return False
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.handle_rect.collidepoint(event.pos) or self.track_rect.collidepoint(event.pos):
+                self.dragging = True
+                self._update_value_from_mouse(event.pos[0])
+                return True
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.dragging = False
+        elif event.type == pygame.MOUSEMOTION and self.dragging:
+            self._update_value_from_mouse(event.pos[0])
+            return True
+        return False
+
+    def _update_value_from_mouse(self, mouse_x):
+        """Update value based on mouse x position."""
+        ratio = (mouse_x - self.x) / self.width
+        ratio = max(0, min(1, ratio))
+        self.value = self.min_val + ratio * (self.max_val - self.min_val)
+        self._update_handle()
+
+
 class MarbleSimulation:
     def __init__(self):
         pygame.init()
@@ -119,6 +186,21 @@ class MarbleSimulation:
         self.start_button = Button(WIDTH // 2 - 60, HEIGHT - 60, 120, 40, "Start")
         self.reset_button = Button(WIDTH // 2 - 60, HEIGHT - 60, 120, 40, "Reset")
         self.reset_button.visible = False
+
+        # Settings sliders (positioned at bottom left)
+        slider_x = 20
+        slider_width = 150
+        self.timer_slider = Slider(slider_x, HEIGHT - 180, slider_width,
+                                   "Timer (sec)", 10, 120, 60, "{:.0f}")
+        self.gravity_slider = Slider(slider_x, HEIGHT - 140, slider_width,
+                                     "Gravity", 200, 1200, GRAVITY, "{:.0f}")
+        self.bounce_slider = Slider(slider_x, HEIGHT - 100, slider_width,
+                                    "Bounciness", 0.5, 2.0, ELASTICITY, "{:.2f}")
+        self.speed_slider = Slider(slider_x + slider_width + 40, HEIGHT - 180, slider_width,
+                                   "Speed", 0.25, 1.5, 0.75, "{:.2f}")
+
+        self.sliders = [self.timer_slider, self.gravity_slider,
+                        self.bounce_slider, self.speed_slider]
 
         self.setup_simulation()
 
@@ -271,6 +353,11 @@ class MarbleSimulation:
                 if event.type == pygame.QUIT:
                     return
 
+                # Handle slider events in ready state
+                if self.state == "ready":
+                    for slider in self.sliders:
+                        slider.handle_event(event)
+
                 # Handle button clicks
                 if self.state == "ready" and self.start_button.is_clicked(event):
                     self.start_simulation()
@@ -281,6 +368,9 @@ class MarbleSimulation:
 
             if self.state == "ready":
                 self.draw_simulation()
+                # Draw sliders
+                for slider in self.sliders:
+                    slider.draw(self.screen)
                 self.start_button.draw(self.screen)
             elif self.state == "running":
                 self.update_physics()
@@ -295,10 +385,15 @@ class MarbleSimulation:
     def start_simulation(self):
         """Start the marble race."""
         self.state = "running"
-        self.space.gravity = (0, GRAVITY)
+        # Apply slider settings
+        self.space.gravity = (0, self.gravity_slider.value)
+        self.sim_speed = self.speed_slider.value
+        self.time_limit = self.timer_slider.value
+        # Apply bounciness to all marbles
+        for m in self.marbles:
+            m['shape'].elasticity = self.bounce_slider.value
         self.start_button.visible = False
         self.start_time = pygame.time.get_ticks()
-        self.time_limit = 60  # seconds
 
     def reset_simulation(self):
         """Reset everything for a new race."""
@@ -325,8 +420,8 @@ class MarbleSimulation:
         self.reset_button.visible = True
 
     def update_physics(self):
-        # Step the physics engine (75% speed for slower simulation)
-        dt = 0.75 / FPS
+        # Step the physics engine using speed from slider
+        dt = self.sim_speed / FPS
         self.space.step(dt)
 
         # Check for marbles exiting the bottom
