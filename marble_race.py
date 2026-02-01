@@ -723,7 +723,7 @@ class MarbleSimulation:
 
             # Draw the Rank # and name
             if m.get('tied_for_last'):
-                rank_text = small_font.render(f"TIED {m['name']}", True, (255, 100, 100))
+                rank_text = small_font.render(f"DNF {m['name']}", True, (255, 100, 100))
             else:
                 rank_text = small_font.render(f"#{i+1} {m['name']}", True, (200, 200, 200))
             surface.blit(rank_text, (x + 12, y - 6))

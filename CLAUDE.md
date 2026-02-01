@@ -17,18 +17,19 @@ python marble_race.py
 
 # Run simulation and capture frames to ./frames/
 python capture_simulation.py
-
-# Then open http://localhost:8000
 ```
 
 ## Architecture
 
-- **marble_race.py**: Main interactive simulation with `MarbleSimulation` class that handles the game loop, physics updates, and rendering
+- **marble_race.py**: Main interactive simulation with `MarbleSimulation` class that handles the game loop, physics updates, rendering, and in-app level editor
 - **capture_simulation.py**: Extended version that saves PNG screenshots at milestone frames (start, falling, funnel entry, completion percentages, final results)
+- **level_io.py**: Level load/save helpers for JSON levels in `levels/`
+- **levels/*.json**: Level data (walls + spinning platforms)
 
 Both files share the same structure:
 - Physics space setup with Pymunk (`pymunk.Space` with gravity)
-- Static funnel geometry (4 line segments forming a V-shape with narrow spout)
+- Static funnel geometry stored in `levels/*.json` under `walls`
+- Rotating platforms stored in `levels/*.json` under `platforms`
 - 100 dynamic marble bodies arranged in a 10x10 grid with rainbow HSV colors
 - Main loop: physics step → collision detection → remove finished marbles → render
 
@@ -38,3 +39,20 @@ Both files share the same structure:
 - `MARBLE_COUNT = 100` - Number of marbles
 - `GRAVITY = 900.0` - Pymunk gravity constant
 - `ELASTICITY = 0.5` / `FRICTION = 0.3` - Marble physics properties
+
+## Level format
+```json
+{
+  "name": "default",
+  "walls": [
+    { "start": [50, 200], "end": [370, 500] }
+  ],
+  "platforms": [
+    { "pos": [280, 350], "length": 50, "angular_velocity": 2.0 }
+  ]
+}
+```
+
+## Quick commands
+- Run simulation: `python marble_race.py`
+- Run capture: `python capture_simulation.py`
