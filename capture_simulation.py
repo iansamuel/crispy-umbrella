@@ -34,6 +34,39 @@ def get_rainbow_color(index, total):
     return int(r * 255), int(g * 255), int(b * 255)
 
 
+def get_color_name(hue):
+    """Returns a color name based on hue value (0-1)."""
+    color_ranges = [
+        (0.00, "Red"),
+        (0.05, "Orange"),
+        (0.11, "Gold"),
+        (0.16, "Yellow"),
+        (0.22, "Lime"),
+        (0.33, "Green"),
+        (0.44, "Teal"),
+        (0.50, "Cyan"),
+        (0.58, "Sky"),
+        (0.66, "Blue"),
+        (0.75, "Purple"),
+        (0.83, "Magenta"),
+        (0.91, "Pink"),
+        (1.00, "Red"),
+    ]
+    for threshold, name in color_ranges:
+        if hue <= threshold:
+            return name
+    return "Red"
+
+
+SHAPE_NAMES = {
+    0: "Circle",
+    3: "Triangle",
+    4: "Square",
+    5: "Pentagon",
+    6: "Hexagon",
+}
+
+
 def get_polygon_vertices(sides, radius):
     """Generate vertices for a regular polygon with given number of sides."""
     import math
@@ -146,7 +179,11 @@ class MarbleSimulation:
             shape.elasticity = ELASTICITY
             shape.friction = FRICTION
 
+            hue = i / MARBLE_COUNT
             color = get_rainbow_color(i, MARBLE_COUNT)
+            color_name = get_color_name(hue)
+            shape_name = SHAPE_NAMES[shape_type]
+            name = f"{color_name} {shape_name}"
 
             self.space.add(body, shape)
 
@@ -157,7 +194,8 @@ class MarbleSimulation:
                 'id': i + 1,
                 'active': True,
                 'shape_type': shape_type,
-                'radius': radius
+                'radius': radius,
+                'name': name
             })
 
     def save_frame(self, name):
@@ -273,13 +311,15 @@ class MarbleSimulation:
 
     def draw_results(self):
         title = self.large_font.render("SIMULATION COMPLETE - RANK ORDER", True, TEXT_COLOR)
-        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 30))
+        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 10))
 
-        start_x = 50
-        start_y = 80
-        cols = 10
-        padding_x = 70
-        padding_y = 50
+        start_x = 30
+        start_y = 50
+        cols = 5
+        padding_x = 155
+        padding_y = 35
+
+        small_font = pygame.font.SysFont("Arial", 12)
 
         for i, m in enumerate(self.finished_rank):
             row = i // cols
@@ -289,19 +329,17 @@ class MarbleSimulation:
             y = start_y + row * padding_y
 
             # Draw marble (scaled up for display)
-            display_radius = m['radius'] * 2
+            display_radius = m['radius'] * 1.2
             if m['shape_type'] == 0:  # Circle
                 pygame.draw.circle(self.screen, m['color'], (x, y), int(display_radius))
-                pygame.draw.circle(self.screen, (255, 255, 255), (x, y), int(display_radius), 1)
             else:  # Polygon
                 vertices = get_polygon_vertices(m['shape_type'], display_radius)
                 points = [(int(x + vx), int(y + vy)) for vx, vy in vertices]
                 pygame.draw.polygon(self.screen, m['color'], points)
-                pygame.draw.polygon(self.screen, (255, 255, 255), points, 1)
 
-            # Draw Rank
-            rank_text = self.font.render(f"#{i+1}", True, (200, 200, 200))
-            self.screen.blit(rank_text, (x + 15, y - 8))
+            # Draw Rank and name
+            rank_text = small_font.render(f"#{i+1} {m['name']}", True, (200, 200, 200))
+            self.screen.blit(rank_text, (x + 12, y - 6))
 
         # Footer
         footer = self.font.render("100 marbles dropped through a funnel - physics by Pymunk", True, (100, 100, 100))
