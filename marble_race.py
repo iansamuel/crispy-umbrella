@@ -14,7 +14,7 @@ FUNNEL_WALL_THICKNESS = 5
 
 # Physics Constants
 GRAVITY = 900.0
-ELASTICITY = 0.5  # Bounciness (0 to 1)
+ELASTICITY = 0.95  # Bounciness (0 to 1)
 FRICTION = 0.3
 
 # Colors
@@ -29,6 +29,17 @@ def get_rainbow_color(index, total):
     # Convert HSV to RGB (0-1 range to 0-255 range)
     r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 1.0)
     return int(r * 255), int(g * 255), int(b * 255)
+
+
+def get_polygon_vertices(sides, radius):
+    """Generate vertices for a regular polygon with given number of sides."""
+    vertices = []
+    for i in range(sides):
+        angle = (2 * math.pi * i / sides) - math.pi / 2  # Start from top
+        x = radius * math.cos(angle)
+        y = radius * math.sin(angle)
+        vertices.append((x, y))
+    return vertices
 
 
 class MarbleSimulation:
@@ -96,6 +107,9 @@ class MarbleSimulation:
         cols = 10
         spacing = MARBLE_RADIUS * 2 + 2
 
+        # Shape types: 0=circle, 3=triangle, 4=square, 5=pentagon, 6=hexagon
+        shape_types = [0, 3, 4, 5, 6]
+
         for i in range(MARBLE_COUNT):
             row = i // cols
             col = i % cols
@@ -103,12 +117,23 @@ class MarbleSimulation:
             x = start_x + (col * spacing) + random.uniform(-5, 5)  # Slight jitter
             y = start_y + (row * spacing)
 
-            mass = 1
-            moment = pymunk.moment_for_circle(mass, 0, MARBLE_RADIUS)
-            body = pymunk.Body(mass, moment)
-            body.position = (x, y)
+            # Randomly vary the radius slightly (80% to 120% of base)
+            radius = MARBLE_RADIUS * random.uniform(0.8, 1.2)
+            shape_type = random.choice(shape_types)
 
-            shape = pymunk.Circle(body, MARBLE_RADIUS)
+            mass = 1
+            if shape_type == 0:  # Circle
+                moment = pymunk.moment_for_circle(mass, 0, radius)
+                body = pymunk.Body(mass, moment)
+                body.position = (x, y)
+                shape = pymunk.Circle(body, radius)
+            else:  # Polygon
+                vertices = get_polygon_vertices(shape_type, radius)
+                moment = pymunk.moment_for_poly(mass, vertices)
+                body = pymunk.Body(mass, moment)
+                body.position = (x, y)
+                shape = pymunk.Poly(body, vertices)
+
             shape.elasticity = ELASTICITY
             shape.friction = FRICTION
 
@@ -122,7 +147,9 @@ class MarbleSimulation:
                 'shape': shape,
                 'color': color,
                 'id': i + 1,
-                'active': True
+                'active': True,
+                'shape_type': shape_type,
+                'radius': radius
             })
 
     def run(self):
@@ -185,16 +212,21 @@ class MarbleSimulation:
         for m in self.marbles:
             if m['active']:
                 pos = m['body'].position
-                # Draw circle
-                pygame.draw.circle(
-                    self.screen, m['color'],
-                    (int(pos.x), int(pos.y)), MARBLE_RADIUS
-                )
-                # Optional: Draw a black outline to see rotation/separation
-                pygame.draw.circle(
-                    self.screen, (0, 0, 0),
-                    (int(pos.x), int(pos.y)), MARBLE_RADIUS, 1
-                )
+                if m['shape_type'] == 0:  # Circle
+                    pygame.draw.circle(
+                        self.screen, m['color'],
+                        (int(pos.x), int(pos.y)), int(m['radius'])
+                    )
+                    pygame.draw.circle(
+                        self.screen, (0, 0, 0),
+                        (int(pos.x), int(pos.y)), int(m['radius']), 1
+                    )
+                else:  # Polygon
+                    # Get world coordinates of vertices
+                    vertices = [m['body'].local_to_world(v) for v in m['shape'].get_vertices()]
+                    points = [(int(v.x), int(v.y)) for v in vertices]
+                    pygame.draw.polygon(self.screen, m['color'], points)
+                    pygame.draw.polygon(self.screen, (0, 0, 0), points, 1)
 
         # 3. Draw UI
         status_text = f"Finished: {len(self.finished_rank)} / {MARBLE_COUNT}"
@@ -220,8 +252,14 @@ class MarbleSimulation:
             x = start_x + col * padding_x
             y = start_y + row * padding_y
 
-            # Draw the marble
-            pygame.draw.circle(self.screen, m['color'], (x, y), MARBLE_RADIUS * 1.5)
+            # Draw the marble (scaled up for display)
+            display_radius = m['radius'] * 1.5
+            if m['shape_type'] == 0:  # Circle
+                pygame.draw.circle(self.screen, m['color'], (x, y), int(display_radius))
+            else:  # Polygon
+                vertices = get_polygon_vertices(m['shape_type'], display_radius)
+                points = [(int(x + vx), int(y + vy)) for vx, vy in vertices]
+                pygame.draw.polygon(self.screen, m['color'], points)
 
             # Draw the Rank #
             rank_text = self.font.render(f"#{i+1}", True, (200, 200, 200))
