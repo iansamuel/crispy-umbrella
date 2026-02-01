@@ -79,6 +79,7 @@ class MarbleSimulation:
         platform_width = 60  # Small platform at top center
 
         # Define line segments
+        guard_height = 250  # Height of vertical guards above funnel top
         walls = [
             # Left diagonal wall
             [(-top_width, funnel_top_y), (-neck_width, funnel_neck_y)],
@@ -93,6 +94,9 @@ class MarbleSimulation:
             [(-platform_width // 2, funnel_top_y + 15), (0, funnel_top_y)],
             [(0, funnel_top_y), (platform_width // 2, funnel_top_y + 15)],
             [(platform_width // 2, funnel_top_y + 15), (platform_width, funnel_top_y + 40)],
+            # Vertical guards at funnel edges to keep marbles in
+            [(-top_width, funnel_top_y - guard_height), (-top_width, funnel_top_y)],
+            [(top_width, funnel_top_y - guard_height), (top_width, funnel_top_y)],
         ]
 
         for p1, p2 in walls:
