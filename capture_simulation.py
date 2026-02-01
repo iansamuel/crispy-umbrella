@@ -15,7 +15,7 @@ FUNNEL_WALL_THICKNESS = 5
 
 # Physics Constants
 GRAVITY = 600.0
-ELASTICITY = 1.5
+ELASTICITY = 1.1
 FRICTION = 0.3
 
 # Colors

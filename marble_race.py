@@ -14,7 +14,7 @@ FUNNEL_WALL_THICKNESS = 5
 
 # Physics Constants
 GRAVITY = 600.0
-ELASTICITY = 1.5  # Bounciness (values > 1 are super bouncy)
+ELASTICITY = 1.1  # Bounciness (values > 1 are super bouncy)
 FRICTION = 0.3
 
 # Colors
