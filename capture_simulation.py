@@ -14,7 +14,7 @@ MARBLE_RADIUS = 6
 FUNNEL_WALL_THICKNESS = 5
 
 # Physics Constants
-GRAVITY = 900.0
+GRAVITY = 600.0
 ELASTICITY = 0.95
 FRICTION = 0.3
 
@@ -101,9 +101,10 @@ class MarbleSimulation:
             self.space.add(shape)
 
     def spawn_marbles(self):
-        """Creates 100 marbles in a grid pattern above the funnel."""
+        """Creates 100 marbles in a grid pattern above the center platform."""
         random.seed(42)  # Fixed seed for reproducibility
-        start_x = WIDTH // 2 - 200
+        # Spawn centered above the platform (platform is 120px wide at center)
+        start_x = WIDTH // 2 - 70  # Narrower spawn area
         start_y = 50
         cols = 10
         spacing = MARBLE_RADIUS * 2 + 2
