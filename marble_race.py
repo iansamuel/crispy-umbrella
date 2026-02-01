@@ -132,7 +132,35 @@ class MarbleSimulation:
         self.finished_rank = []  # List of marble data in order of finish
 
         self.create_funnel()
+        self.create_rotating_platforms()
         self.spawn_marbles()
+
+    def create_rotating_platforms(self):
+        """Creates rotating platforms to add chaos to the simulation."""
+        center_x = WIDTH // 2
+
+        # Platform configurations: (x_offset, y_position, length, angular_velocity)
+        platforms = [
+            (-120, 350, 50, 2.0),   # Left platform, spins clockwise
+            (120, 350, 50, -2.0),   # Right platform, spins counter-clockwise
+            (0, 420, 40, 3.0),      # Center platform, spins faster
+        ]
+
+        self.rotating_bodies = []
+
+        for x_offset, y_pos, length, angular_vel in platforms:
+            # Create a kinematic body (controlled movement, not affected by forces)
+            body = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
+            body.position = (center_x + x_offset, y_pos)
+            body.angular_velocity = angular_vel
+
+            # Create a line segment as the platform
+            shape = pymunk.Segment(body, (-length, 0), (length, 0), 4)
+            shape.elasticity = 0.8
+            shape.friction = 0.5
+
+            self.space.add(body, shape)
+            self.rotating_bodies.append((body, shape))
 
     def create_funnel(self):
         """Creates the static lines that form the funnel."""
@@ -278,8 +306,8 @@ class MarbleSimulation:
         self.setup_simulation()
 
     def update_physics(self):
-        # Step the physics engine
-        dt = 1.0 / FPS
+        # Step the physics engine (75% speed for slower simulation)
+        dt = 0.75 / FPS
         self.space.step(dt)
 
         # Check for marbles exiting the bottom
