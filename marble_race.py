@@ -75,6 +75,35 @@ def get_polygon_vertices(sides, radius):
     return vertices
 
 
+class Button:
+    """Simple button class for pygame UI."""
+    def __init__(self, x, y, width, height, text, color=(80, 80, 100), hover_color=(100, 100, 130)):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.text = text
+        self.color = color
+        self.hover_color = hover_color
+        self.font = pygame.font.SysFont("Arial", 18, bold=True)
+        self.visible = True
+
+    def draw(self, screen):
+        if not self.visible:
+            return
+        mouse_pos = pygame.mouse.get_pos()
+        color = self.hover_color if self.rect.collidepoint(mouse_pos) else self.color
+        pygame.draw.rect(screen, color, self.rect, border_radius=8)
+        pygame.draw.rect(screen, (150, 150, 150), self.rect, 2, border_radius=8)
+        text_surf = self.font.render(self.text, True, TEXT_COLOR)
+        text_rect = text_surf.get_rect(center=self.rect.center)
+        screen.blit(text_surf, text_rect)
+
+    def is_clicked(self, event):
+        if not self.visible:
+            return False
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            return self.rect.collidepoint(event.pos)
+        return False
+
+
 class MarbleSimulation:
     def __init__(self):
         pygame.init()
@@ -83,17 +112,24 @@ class MarbleSimulation:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("Arial", 16)
 
+        # Simulation state: "ready", "running", "finished"
+        self.state = "ready"
+
+        # UI Buttons
+        self.start_button = Button(WIDTH // 2 - 60, HEIGHT - 60, 120, 40, "Start")
+        self.reset_button = Button(WIDTH // 2 - 60, HEIGHT - 60, 120, 40, "Reset")
+        self.reset_button.visible = False
+
+        self.setup_simulation()
+
+    def setup_simulation(self):
+        """Initialize or reset the physics simulation."""
         # Pymunk Setup
         self.space = pymunk.Space()
-        self.space.gravity = (0, GRAVITY)
-        self.draw_options = pymunk.pygame_util.DrawOptions(self.screen)
+        self.space.gravity = (0, 0)  # Start with no gravity until simulation begins
 
-        # Disable default Pymunk debug colors so we can use our own
-        self.draw_options.flags = pymunk.pygame_util.DrawOptions.DRAW_SHAPES
-
-        self.marbles = []       # List of (body, shape, color, id)
+        self.marbles = []       # List of marble data
         self.finished_rank = []  # List of marble data in order of finish
-        self.simulation_over = False
 
         self.create_funnel()
         self.spawn_marbles()
@@ -207,16 +243,39 @@ class MarbleSimulation:
                 if event.type == pygame.QUIT:
                     return
 
+                # Handle button clicks
+                if self.state == "ready" and self.start_button.is_clicked(event):
+                    self.start_simulation()
+                elif self.state == "finished" and self.reset_button.is_clicked(event):
+                    self.reset_simulation()
+
             self.screen.fill(BG_COLOR)
 
-            if not self.simulation_over:
+            if self.state == "ready":
+                self.draw_simulation()
+                self.start_button.draw(self.screen)
+            elif self.state == "running":
                 self.update_physics()
                 self.draw_simulation()
-            else:
+            elif self.state == "finished":
                 self.draw_results()
+                self.reset_button.draw(self.screen)
 
             pygame.display.flip()
             self.clock.tick(FPS)
+
+    def start_simulation(self):
+        """Start the marble race."""
+        self.state = "running"
+        self.space.gravity = (0, GRAVITY)
+        self.start_button.visible = False
+
+    def reset_simulation(self):
+        """Reset everything for a new race."""
+        self.state = "ready"
+        self.start_button.visible = True
+        self.reset_button.visible = False
+        self.setup_simulation()
 
     def update_physics(self):
         # Step the physics engine
@@ -238,7 +297,8 @@ class MarbleSimulation:
 
         # Check if all marbles are done
         if len(self.finished_rank) == MARBLE_COUNT:
-            self.simulation_over = True
+            self.state = "finished"
+            self.reset_button.visible = True
 
     def draw_simulation(self):
         # Draw Funnel Lines (Pymunk debug draw handles this, but let's make it cleaner)
