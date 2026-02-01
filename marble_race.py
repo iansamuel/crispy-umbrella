@@ -297,6 +297,8 @@ class MarbleSimulation:
         self.state = "running"
         self.space.gravity = (0, GRAVITY)
         self.start_button.visible = False
+        self.start_time = pygame.time.get_ticks()
+        self.time_limit = 60  # seconds
 
     def reset_simulation(self):
         """Reset everything for a new race."""
@@ -304,6 +306,23 @@ class MarbleSimulation:
         self.start_button.visible = True
         self.reset_button.visible = False
         self.setup_simulation()
+
+    def end_with_timeout(self):
+        """End simulation due to timeout - remaining marbles tie for last."""
+        # Get the last place rank
+        last_rank = len(self.finished_rank) + 1
+
+        # Add all remaining active marbles as tied for last
+        for m in self.marbles:
+            if m['active']:
+                m['active'] = False
+                m['tied_for_last'] = True
+                # Remove from physics space
+                self.space.remove(m['body'], m['shape'])
+                self.finished_rank.append(m)
+
+        self.state = "finished"
+        self.reset_button.visible = True
 
     def update_physics(self):
         # Step the physics engine (75% speed for slower simulation)
@@ -323,10 +342,17 @@ class MarbleSimulation:
                     # Add to rank list
                     self.finished_rank.append(m)
 
-        # Check if all marbles are done
+        # Check elapsed time
+        elapsed = (pygame.time.get_ticks() - self.start_time) / 1000.0
+        self.time_remaining = max(0, self.time_limit - elapsed)
+
+        # Check if all marbles are done or time is up
         if len(self.finished_rank) == MARBLE_COUNT:
             self.state = "finished"
             self.reset_button.visible = True
+        elif self.time_remaining <= 0:
+            # Time's up - remaining marbles tie for last
+            self.end_with_timeout()
 
     def draw_simulation(self):
         # Draw Funnel Lines (Pymunk debug draw handles this, but let's make it cleaner)
@@ -370,6 +396,15 @@ class MarbleSimulation:
         surf = self.font.render(status_text, True, TEXT_COLOR)
         self.screen.blit(surf, (10, 10))
 
+        # Draw timer if simulation is running
+        if self.state == "running":
+            minutes = int(self.time_remaining // 60)
+            seconds = int(self.time_remaining % 60)
+            timer_color = (255, 100, 100) if self.time_remaining < 10 else TEXT_COLOR
+            timer_text = f"Time: {minutes}:{seconds:02d}"
+            timer_surf = self.font.render(timer_text, True, timer_color)
+            self.screen.blit(timer_surf, (WIDTH - 100, 10))
+
     def draw_results(self):
         # Display the ranked order
         title = self.font.render("SIMULATION COMPLETE - RANK ORDER", True, TEXT_COLOR)
@@ -401,7 +436,10 @@ class MarbleSimulation:
                 pygame.draw.polygon(self.screen, m['color'], points)
 
             # Draw the Rank # and name
-            rank_text = small_font.render(f"#{i+1} {m['name']}", True, (200, 200, 200))
+            if m.get('tied_for_last'):
+                rank_text = small_font.render(f"TIED {m['name']}", True, (255, 100, 100))
+            else:
+                rank_text = small_font.render(f"#{i+1} {m['name']}", True, (200, 200, 200))
             self.screen.blit(rank_text, (x + 12, y - 6))
 
 
