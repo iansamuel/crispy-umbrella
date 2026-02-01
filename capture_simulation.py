@@ -80,12 +80,15 @@ class MarbleSimulation:
         spout_bottom_y = 700
         neck_width = 30
         top_width = 350
+        platform_width = 60  # Small platform at top center
 
         walls = [
             [(-top_width, funnel_top_y), (-neck_width, funnel_neck_y)],
             [(top_width, funnel_top_y), (neck_width, funnel_neck_y)],
             [(-neck_width, funnel_neck_y), (-neck_width, spout_bottom_y)],
             [(neck_width, funnel_neck_y), (neck_width, spout_bottom_y)],
+            # Small horizontal platform at top center
+            [(-platform_width, funnel_top_y + 20), (platform_width, funnel_top_y + 20)],
         ]
 
         for p1, p2 in walls:
