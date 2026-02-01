@@ -15,7 +15,7 @@ FUNNEL_WALL_THICKNESS = 5
 
 # Physics Constants
 GRAVITY = 600.0
-ELASTICITY = 0.95
+ELASTICITY = 1.5
 FRICTION = 0.3
 
 # Colors
@@ -87,8 +87,11 @@ class MarbleSimulation:
             [(top_width, funnel_top_y), (neck_width, funnel_neck_y)],
             [(-neck_width, funnel_neck_y), (-neck_width, spout_bottom_y)],
             [(neck_width, funnel_neck_y), (neck_width, spout_bottom_y)],
-            # Small horizontal platform at top center
-            [(-platform_width, funnel_top_y + 20), (platform_width, funnel_top_y + 20)],
+            # Convex curved platform at top center (marbles roll off sides)
+            [(-platform_width, funnel_top_y + 40), (-platform_width // 2, funnel_top_y + 15)],
+            [(-platform_width // 2, funnel_top_y + 15), (0, funnel_top_y)],
+            [(0, funnel_top_y), (platform_width // 2, funnel_top_y + 15)],
+            [(platform_width // 2, funnel_top_y + 15), (platform_width, funnel_top_y + 40)],
         ]
 
         for p1, p2 in walls:
