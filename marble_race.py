@@ -4,6 +4,7 @@ import pymunk.pygame_util
 import random
 import colorsys
 import math
+from level_io import load_level, save_level, DEFAULT_LEVEL_PATH, LEVELS_DIR
 
 # --- Configuration ---
 WIDTH, HEIGHT = 800, 800
@@ -103,6 +104,9 @@ class Button:
             return self.rect.collidepoint(event.pos)
         return False
 
+    def set_center(self, x, y):
+        self.rect.center = (x, y)
+
 
 class Slider:
     """Slider control for adjusting numeric values."""
@@ -127,6 +131,12 @@ class Slider:
         ratio = (self.value - self.min_val) / (self.max_val - self.min_val)
         handle_x = self.x + int(ratio * self.width)
         self.handle_rect = pygame.Rect(handle_x - 8, self.y + 16, 16, 16)
+
+    def set_position(self, x, y):
+        self.x = x
+        self.y = y
+        self.track_rect = pygame.Rect(x, y + 20, self.width, 8)
+        self._update_handle()
 
     def draw(self, screen):
         if not self.visible:
@@ -174,17 +184,20 @@ class Slider:
 class MarbleSimulation:
     def __init__(self):
         pygame.init()
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
         pygame.display.set_caption("Marble Funnel Simulation")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("Arial", 16)
+        self.screen_width, self.screen_height = self.screen.get_size()
+        self.prev_screen_size = (self.screen_width, self.screen_height)
 
         # Simulation state: "ready", "running", "finished"
         self.state = "ready"
+        self.prev_state = None
 
         # UI Buttons
-        self.start_button = Button(WIDTH // 2 - 60, HEIGHT - 60, 120, 40, "Start")
-        self.reset_button = Button(WIDTH // 2 - 60, HEIGHT - 60, 120, 40, "Reset")
+        self.start_button = Button(0, 0, 120, 40, "Start")
+        self.reset_button = Button(0, 0, 120, 40, "Reset")
         self.reset_button.visible = False
 
         # Settings sliders (positioned at bottom left)
@@ -202,6 +215,27 @@ class MarbleSimulation:
         self.sliders = [self.timer_slider, self.gravity_slider,
                         self.bounce_slider, self.speed_slider]
 
+        self.update_viewport()
+        self.layout_ui()
+
+        self.default_level_path = DEFAULT_LEVEL_PATH
+        self.edited_level_path = LEVELS_DIR / "edited.json"
+        self.level_name = "level"
+        self.level_walls = []
+        self.level_platforms = []
+        self.wall_shapes = []
+        self.platform_templates = [
+            {"length": 50, "angular_velocity": 2.0},
+            {"length": 50, "angular_velocity": -2.0},
+            {"length": 40, "angular_velocity": 3.0},
+        ]
+        self.platform_template_index = 0
+
+        # Editor state
+        self.editor_dragging = False
+        self.editor_start = None
+        self.editor_end = None
+
         self.setup_simulation()
 
     def setup_simulation(self):
@@ -209,31 +243,67 @@ class MarbleSimulation:
         # Pymunk Setup
         self.space = pymunk.Space()
         self.space.gravity = (0, 0)  # Start with no gravity until simulation begins
+        self.wall_shapes = []
 
         self.marbles = []       # List of marble data
         self.finished_rank = []  # List of marble data in order of finish
 
-        self.create_funnel()
+        if not self.level_walls:
+            self.load_level(self.default_level_path)
+        else:
+            self.rebuild_walls()
         self.create_rotating_platforms()
         self.spawn_marbles()
 
+    def update_viewport(self):
+        self.screen_width, self.screen_height = self.screen.get_size()
+        self.scale = min(self.screen_width / WIDTH, self.screen_height / HEIGHT)
+        self.scaled_width = int(WIDTH * self.scale)
+        self.scaled_height = int(HEIGHT * self.scale)
+        self.offset_x = (self.screen_width - self.scaled_width) // 2
+        self.offset_y = (self.screen_height - self.scaled_height) // 2
+        if (self.screen_width, self.screen_height) != self.prev_screen_size:
+            self.prev_screen_size = (self.screen_width, self.screen_height)
+            self.layout_ui()
+
+    def layout_ui(self):
+        self.start_button.set_center(self.screen_width // 2, self.screen_height - 40)
+        self.reset_button.set_center(self.screen_width // 2, self.screen_height - 40)
+
+        slider_x = 20
+        slider_width = self.timer_slider.width
+        base_y = self.screen_height - 180
+        self.timer_slider.set_position(slider_x, base_y)
+        self.gravity_slider.set_position(slider_x, base_y + 40)
+        self.bounce_slider.set_position(slider_x, base_y + 80)
+        self.speed_slider.set_position(slider_x + slider_width + 40, base_y)
+
+    def screen_to_world(self, pos):
+        x, y = pos
+        x -= self.offset_x
+        y -= self.offset_y
+        if x < 0 or y < 0 or x > self.scaled_width or y > self.scaled_height:
+            return None
+        return (x / self.scale, y / self.scale)
+
+    def load_level(self, path):
+        level = load_level(path)
+        self.level_name = level.get("name", "level")
+        self.level_walls = list(level.get("walls", []))
+        self.level_platforms = list(level.get("platforms", []))
+        self.rebuild_walls()
+
     def create_rotating_platforms(self):
         """Creates rotating platforms to add chaos to the simulation."""
-        center_x = WIDTH // 2
-
-        # Platform configurations: (x_offset, y_position, length, angular_velocity)
-        platforms = [
-            (-120, 350, 50, 2.0),   # Left platform, spins clockwise
-            (120, 350, 50, -2.0),   # Right platform, spins counter-clockwise
-            (0, 420, 40, 3.0),      # Center platform, spins faster
-        ]
-
         self.rotating_bodies = []
 
-        for x_offset, y_pos, length, angular_vel in platforms:
+        for platform in self.level_platforms:
+            pos = platform["pos"]
+            length = platform["length"]
+            angular_vel = platform["angular_velocity"]
             # Create a kinematic body (controlled movement, not affected by forces)
             body = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
-            body.position = (center_x + x_offset, y_pos)
+            body.position = pos
             body.angular_velocity = angular_vel
 
             # Create a line segment as the platform
@@ -244,50 +314,21 @@ class MarbleSimulation:
             self.space.add(body, shape)
             self.rotating_bodies.append((body, shape))
 
-    def create_funnel(self):
-        """Creates the static lines that form the funnel."""
+    def rebuild_walls(self):
+        """Rebuilds static wall segments from current level data."""
         static_body = self.space.static_body
+        if self.wall_shapes:
+            for shape in self.wall_shapes:
+                self.space.remove(shape)
+        self.wall_shapes = []
 
-        # Funnel coordinates
-        center_x = WIDTH // 2
-        funnel_top_y = 200
-        funnel_neck_y = 500
-        spout_bottom_y = 700
-        neck_width = 30  # Narrow opening
-        top_width = 350
-        platform_width = 60  # Small platform at top center
-
-        # Define line segments
-        guard_height = 250  # Height of vertical guards above funnel top
-        walls = [
-            # Left diagonal wall
-            [(-top_width, funnel_top_y), (-neck_width, funnel_neck_y)],
-            # Right diagonal wall
-            [(top_width, funnel_top_y), (neck_width, funnel_neck_y)],
-            # Left spout wall
-            [(-neck_width, funnel_neck_y), (-neck_width, spout_bottom_y)],
-            # Right spout wall
-            [(neck_width, funnel_neck_y), (neck_width, spout_bottom_y)],
-            # Convex curved platform at top center (marbles roll off sides)
-            [(-platform_width, funnel_top_y + 40), (-platform_width // 2, funnel_top_y + 15)],
-            [(-platform_width // 2, funnel_top_y + 15), (0, funnel_top_y)],
-            [(0, funnel_top_y), (platform_width // 2, funnel_top_y + 15)],
-            [(platform_width // 2, funnel_top_y + 15), (platform_width, funnel_top_y + 40)],
-            # Vertical guards at funnel edges to keep marbles in
-            [(-top_width, funnel_top_y - guard_height), (-top_width, funnel_top_y)],
-            [(top_width, funnel_top_y - guard_height), (top_width, funnel_top_y)],
-        ]
-
-        for p1, p2 in walls:
-            # Adjust coordinates relative to center_x
-            start = (center_x + p1[0], p1[1])
-            end = (center_x + p2[0], p2[1])
-
+        for start, end in self.level_walls:
             shape = pymunk.Segment(static_body, start, end, FUNNEL_WALL_THICKNESS)
             shape.elasticity = 0.5
             shape.friction = 0.5
             shape.color = (200, 200, 200, 255)  # RGBA
             self.space.add(shape)
+            self.wall_shapes.append(shape)
 
     def spawn_marbles(self):
         """Creates 100 marbles in a grid pattern above the center platform."""
@@ -349,9 +390,14 @@ class MarbleSimulation:
 
     def run(self):
         while True:
+            self.update_viewport()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
+
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_e:
+                    self.toggle_editor()
+                    continue
 
                 # Handle slider events in ready state
                 if self.state == "ready":
@@ -363,24 +409,59 @@ class MarbleSimulation:
                     self.start_simulation()
                 elif self.state == "finished" and self.reset_button.is_clicked(event):
                     self.reset_simulation()
+                elif self.state == "edit":
+                    self.handle_editor_event(event)
 
-            self.screen.fill(BG_COLOR)
+            world_surface = pygame.Surface((WIDTH, HEIGHT))
+            world_surface.fill(BG_COLOR)
 
             if self.state == "ready":
-                self.draw_simulation()
-                # Draw sliders
+                self.draw_simulation(world_surface)
+            elif self.state == "running":
+                self.update_physics()
+                self.draw_simulation(world_surface)
+            elif self.state == "edit":
+                self.draw_editor(world_surface)
+
+            self.screen.fill(BG_COLOR)
+            scaled_world = pygame.transform.smoothscale(
+                world_surface, (self.scaled_width, self.scaled_height)
+            )
+            self.screen.blit(scaled_world, (self.offset_x, self.offset_y))
+
+            if self.state == "ready":
                 for slider in self.sliders:
                     slider.draw(self.screen)
                 self.start_button.draw(self.screen)
+                self.draw_status(self.screen)
             elif self.state == "running":
-                self.update_physics()
-                self.draw_simulation()
+                self.draw_status(self.screen)
             elif self.state == "finished":
-                self.draw_results()
+                self.draw_results(self.screen)
                 self.reset_button.draw(self.screen)
+            elif self.state == "edit":
+                self.draw_editor_ui(self.screen)
 
             pygame.display.flip()
             self.clock.tick(FPS)
+
+    def toggle_editor(self):
+        if self.state != "edit":
+            self.prev_state = self.state
+            self.state = "edit"
+            self.space.gravity = (0, 0)
+            self.start_button.visible = False
+            self.reset_button.visible = False
+            for slider in self.sliders:
+                slider.visible = False
+        else:
+            self.editor_dragging = False
+            self.editor_start = None
+            self.editor_end = None
+            self.state = "ready"
+            for slider in self.sliders:
+                slider.visible = True
+            self.reset_simulation()
 
     def start_simulation(self):
         """Start the marble race."""
@@ -401,6 +482,117 @@ class MarbleSimulation:
         self.start_button.visible = True
         self.reset_button.visible = False
         self.setup_simulation()
+
+    def handle_editor_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_BACKSPACE:
+                if self.level_walls:
+                    self.level_walls.pop()
+                    self.rebuild_walls()
+            elif event.key == pygame.K_c:
+                self.level_walls = []
+                self.level_platforms = []
+                self.rebuild_walls()
+            elif event.key == pygame.K_r:
+                self.load_level(self.default_level_path)
+            elif event.key == pygame.K_s:
+                save_level(self.edited_level_path, self.level_walls, self.level_platforms, name="edited")
+            elif event.key == pygame.K_l:
+                if self.edited_level_path.exists():
+                    self.load_level(self.edited_level_path)
+            elif event.key == pygame.K_LEFTBRACKET:
+                self.platform_template_index = (self.platform_template_index - 1) % len(self.platform_templates)
+            elif event.key == pygame.K_RIGHTBRACKET:
+                self.platform_template_index = (self.platform_template_index + 1) % len(self.platform_templates)
+
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            world_pos = self.screen_to_world(event.pos)
+            if event.button == 1:
+                if world_pos is None:
+                    return
+                self.editor_dragging = True
+                self.editor_start = world_pos
+                self.editor_end = world_pos
+            elif event.button == 3:
+                if world_pos is None:
+                    return
+                if not self.delete_platform_at(world_pos):
+                    self.delete_wall_at(world_pos)
+
+        elif event.type == pygame.MOUSEMOTION and self.editor_dragging:
+            world_pos = self.screen_to_world(event.pos)
+            if world_pos is not None:
+                self.editor_end = world_pos
+
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self.editor_dragging and self.editor_start and self.editor_end:
+                if self.distance(self.editor_start, self.editor_end) > 4:
+                    self.level_walls.append((self.editor_start, self.editor_end))
+                    self.rebuild_walls()
+                else:
+                    self.add_platform_at(self.editor_end)
+            self.editor_dragging = False
+            self.editor_start = None
+            self.editor_end = None
+
+    def delete_wall_at(self, pos):
+        if not self.level_walls:
+            return
+        best_idx = None
+        best_dist = 9999
+        for idx, (a, b) in enumerate(self.level_walls):
+            dist = self.distance_to_segment(pos, a, b)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = idx
+        if best_idx is not None and best_dist <= 12:
+            self.level_walls.pop(best_idx)
+            self.rebuild_walls()
+
+    def add_platform_at(self, pos):
+        template = self.platform_templates[self.platform_template_index]
+        self.level_platforms.append({
+            "pos": (float(pos[0]), float(pos[1])),
+            "length": float(template["length"]),
+            "angular_velocity": float(template["angular_velocity"]),
+        })
+
+    def delete_platform_at(self, pos):
+        if not self.level_platforms:
+            return False
+        best_idx = None
+        best_dist = 9999
+        for idx, platform in enumerate(self.level_platforms):
+            cx, cy = platform["pos"]
+            length = platform["length"]
+            a = (cx - length, cy)
+            b = (cx + length, cy)
+            dist = self.distance_to_segment(pos, a, b)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = idx
+        if best_idx is not None and best_dist <= 12:
+            self.level_platforms.pop(best_idx)
+            return True
+        return False
+
+    def distance(self, a, b):
+        return math.hypot(b[0] - a[0], b[1] - a[1])
+
+    def distance_to_segment(self, p, a, b):
+        ax, ay = a
+        bx, by = b
+        px, py = p
+        abx = bx - ax
+        aby = by - ay
+        ab_len_sq = abx * abx + aby * aby
+        if ab_len_sq == 0:
+            return math.hypot(px - ax, py - ay)
+        t = ((px - ax) * abx + (py - ay) * aby) / ab_len_sq
+        t = max(0.0, min(1.0, t))
+        cx = ax + t * abx
+        cy = ay + t * aby
+        return math.hypot(px - cx, py - cy)
 
     def end_with_timeout(self):
         """End simulation due to timeout - remaining marbles tie for last."""
@@ -449,7 +641,7 @@ class MarbleSimulation:
             # Time's up - remaining marbles tie for last
             self.end_with_timeout()
 
-    def draw_simulation(self):
+    def draw_simulation(self, surface):
         # Draw Funnel Lines (Pymunk debug draw handles this, but let's make it cleaner)
         # We manually draw marbles to control their colors
 
@@ -462,7 +654,7 @@ class MarbleSimulation:
                 p1_world = shape.body.local_to_world(p1)
                 p2_world = shape.body.local_to_world(p2)
                 pygame.draw.line(
-                    self.screen, FUNNEL_COLOR, p1_world, p2_world,
+                    surface, FUNNEL_COLOR, p1_world, p2_world,
                     int(shape.radius * 2)
                 )
 
@@ -472,38 +664,37 @@ class MarbleSimulation:
                 pos = m['body'].position
                 if m['shape_type'] == 0:  # Circle
                     pygame.draw.circle(
-                        self.screen, m['color'],
+                        surface, m['color'],
                         (int(pos.x), int(pos.y)), int(m['radius'])
                     )
                     pygame.draw.circle(
-                        self.screen, (0, 0, 0),
+                        surface, (0, 0, 0),
                         (int(pos.x), int(pos.y)), int(m['radius']), 1
                     )
                 else:  # Polygon
                     # Get world coordinates of vertices
                     vertices = [m['body'].local_to_world(v) for v in m['shape'].get_vertices()]
                     points = [(int(v.x), int(v.y)) for v in vertices]
-                    pygame.draw.polygon(self.screen, m['color'], points)
-                    pygame.draw.polygon(self.screen, (0, 0, 0), points, 1)
+                    pygame.draw.polygon(surface, m['color'], points)
+                    pygame.draw.polygon(surface, (0, 0, 0), points, 1)
 
-        # 3. Draw UI
+    def draw_status(self, surface):
         status_text = f"Finished: {len(self.finished_rank)} / {MARBLE_COUNT}"
         surf = self.font.render(status_text, True, TEXT_COLOR)
-        self.screen.blit(surf, (10, 10))
+        surface.blit(surf, (10, 10))
 
-        # Draw timer if simulation is running
         if self.state == "running":
             minutes = int(self.time_remaining // 60)
             seconds = int(self.time_remaining % 60)
             timer_color = (255, 100, 100) if self.time_remaining < 10 else TEXT_COLOR
             timer_text = f"Time: {minutes}:{seconds:02d}"
             timer_surf = self.font.render(timer_text, True, timer_color)
-            self.screen.blit(timer_surf, (WIDTH - 100, 10))
+            surface.blit(timer_surf, (self.screen_width - 120, 10))
 
-    def draw_results(self):
+    def draw_results(self, surface):
         # Display the ranked order
         title = self.font.render("SIMULATION COMPLETE - RANK ORDER", True, TEXT_COLOR)
-        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 20))
+        surface.blit(title, (self.screen_width // 2 - title.get_width() // 2, 20))
 
         # Grid settings for displaying results
         start_x = 30
@@ -524,18 +715,59 @@ class MarbleSimulation:
             # Draw the marble (scaled up for display)
             display_radius = m['radius'] * 1.2
             if m['shape_type'] == 0:  # Circle
-                pygame.draw.circle(self.screen, m['color'], (x, y), int(display_radius))
+                pygame.draw.circle(surface, m['color'], (x, y), int(display_radius))
             else:  # Polygon
                 vertices = get_polygon_vertices(m['shape_type'], display_radius)
                 points = [(int(x + vx), int(y + vy)) for vx, vy in vertices]
-                pygame.draw.polygon(self.screen, m['color'], points)
+                pygame.draw.polygon(surface, m['color'], points)
 
             # Draw the Rank # and name
             if m.get('tied_for_last'):
                 rank_text = small_font.render(f"TIED {m['name']}", True, (255, 100, 100))
             else:
                 rank_text = small_font.render(f"#{i+1} {m['name']}", True, (200, 200, 200))
-            self.screen.blit(rank_text, (x + 12, y - 6))
+            surface.blit(rank_text, (x + 12, y - 6))
+
+    def draw_editor(self, surface):
+        # Draw existing walls
+        for start, end in self.level_walls:
+            pygame.draw.line(
+                surface, FUNNEL_COLOR, start, end, FUNNEL_WALL_THICKNESS * 2
+            )
+
+        # Draw platforms
+        for platform in self.level_platforms:
+            cx, cy = platform["pos"]
+            length = platform["length"]
+            a = (cx - length, cy)
+            b = (cx + length, cy)
+            pygame.draw.line(surface, (180, 220, 140), a, b, 6)
+
+        # Draw preview segment
+        if self.editor_dragging and self.editor_start and self.editor_end:
+            pygame.draw.line(
+                surface, (120, 200, 255), self.editor_start, self.editor_end, 2
+            )
+
+    def draw_editor_ui(self, surface):
+        template = self.platform_templates[self.platform_template_index]
+        template_label = f"Platform [{self.platform_template_index + 1}/{len(self.platform_templates)}] len={int(template['length'])} av={template['angular_velocity']:.1f}"
+
+        # Editor UI
+        lines = [
+            "EDITOR MODE (E to exit)",
+            "Left drag: add wall",
+            "Left click: add platform",
+            "Right click: delete platform/wall",
+            "Backspace: undo last",
+            "C: clear all  R: reset default",
+            "S: save edited  L: load edited",
+            "[ / ]: cycle platform type",
+            template_label,
+        ]
+        for i, text in enumerate(lines):
+            surf = self.font.render(text, True, (220, 220, 220))
+            surface.blit(surf, (10, 10 + i * 18))
 
 
 if __name__ == "__main__":

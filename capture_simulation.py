@@ -5,6 +5,7 @@ import pymunk.pygame_util
 import random
 import colorsys
 import os
+from level_io import load_level, DEFAULT_LEVEL_PATH, LEVELS_DIR
 
 # --- Configuration ---
 WIDTH, HEIGHT = 800, 800
@@ -12,6 +13,7 @@ FPS = 60
 MARBLE_COUNT = 100
 MARBLE_RADIUS = 6
 FUNNEL_WALL_THICKNESS = 5
+EDITED_LEVEL_PATH = LEVELS_DIR / "edited.json"
 
 # Physics Constants
 GRAVITY = 600.0
@@ -100,45 +102,36 @@ class MarbleSimulation:
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+        level_path = EDITED_LEVEL_PATH if EDITED_LEVEL_PATH.exists() else DEFAULT_LEVEL_PATH
+        self.level = load_level(level_path)
         self.create_funnel()
+        self.create_rotating_platforms()
         self.spawn_marbles()
 
     def create_funnel(self):
         """Creates the static lines that form the funnel."""
         static_body = self.space.static_body
-
-        center_x = WIDTH // 2
-        funnel_top_y = 200
-        funnel_neck_y = 500
-        spout_bottom_y = 700
-        neck_width = 30
-        top_width = 350
-        platform_width = 60  # Small platform at top center
-
-        guard_height = 250  # Height of vertical guards above funnel top
-        walls = [
-            [(-top_width, funnel_top_y), (-neck_width, funnel_neck_y)],
-            [(top_width, funnel_top_y), (neck_width, funnel_neck_y)],
-            [(-neck_width, funnel_neck_y), (-neck_width, spout_bottom_y)],
-            [(neck_width, funnel_neck_y), (neck_width, spout_bottom_y)],
-            # Convex curved platform at top center (marbles roll off sides)
-            [(-platform_width, funnel_top_y + 40), (-platform_width // 2, funnel_top_y + 15)],
-            [(-platform_width // 2, funnel_top_y + 15), (0, funnel_top_y)],
-            [(0, funnel_top_y), (platform_width // 2, funnel_top_y + 15)],
-            [(platform_width // 2, funnel_top_y + 15), (platform_width, funnel_top_y + 40)],
-            # Vertical guards at funnel edges to keep marbles in
-            [(-top_width, funnel_top_y - guard_height), (-top_width, funnel_top_y)],
-            [(top_width, funnel_top_y - guard_height), (top_width, funnel_top_y)],
-        ]
-
-        for p1, p2 in walls:
-            start = (center_x + p1[0], p1[1])
-            end = (center_x + p2[0], p2[1])
+        for start, end in self.level.get("walls", []):
 
             shape = pymunk.Segment(static_body, start, end, FUNNEL_WALL_THICKNESS)
             shape.elasticity = 0.5
             shape.friction = 0.5
             self.space.add(shape)
+
+    def create_rotating_platforms(self):
+        self.rotating_bodies = []
+        for platform in self.level.get("platforms", []):
+            pos = platform["pos"]
+            length = platform["length"]
+            angular_vel = platform["angular_velocity"]
+            body = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
+            body.position = pos
+            body.angular_velocity = angular_vel
+            shape = pymunk.Segment(body, (-length, 0), (length, 0), 4)
+            shape.elasticity = 0.8
+            shape.friction = 0.5
+            self.space.add(body, shape)
+            self.rotating_bodies.append((body, shape))
 
     def spawn_marbles(self):
         """Creates 100 marbles in a grid pattern above the center platform."""

@@ -18,12 +18,6 @@ python marble_race.py
 # Run simulation and capture frames to ./frames/
 python capture_simulation.py
 
-# Run web version locally (also works as regular Python)
-python web/main.py
-
-# Build and serve web version with Pygbag
-pip install pygbag
-pygbag web/main.py
 # Then open http://localhost:8000
 ```
 
@@ -31,7 +25,6 @@ pygbag web/main.py
 
 - **marble_race.py**: Main interactive simulation with `MarbleSimulation` class that handles the game loop, physics updates, and rendering
 - **capture_simulation.py**: Extended version that saves PNG screenshots at milestone frames (start, falling, funnel entry, completion percentages, final results)
-- **web/main.py**: Pygbag-compatible web version with async game loop for browser deployment
 
 Both files share the same structure:
 - Physics space setup with Pymunk (`pymunk.Space` with gravity)
