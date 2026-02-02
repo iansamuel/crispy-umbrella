@@ -14,19 +14,15 @@ pip install -r requirements.txt
 
 # Run the interactive simulation
 python marble_race.py
-
-# Run simulation and capture frames to ./frames/
-python capture_simulation.py
 ```
 
 ## Architecture
 
 - **marble_race.py**: Main interactive simulation with `MarbleSimulation` class that handles the game loop, physics updates, rendering, and in-app level editor
-- **capture_simulation.py**: Extended version that saves PNG screenshots at milestone frames (start, falling, funnel entry, completion percentages, final results)
 - **level_io.py**: Level load/save helpers for JSON levels in `levels/`
 - **levels/*.json**: Level data (walls + spinning platforms)
 
-Both files share the same structure:
+Main script structure:
 - Physics space setup with Pymunk (`pymunk.Space` with gravity)
 - Static funnel geometry stored in `levels/*.json` under `walls`
 - Rotating platforms stored in `levels/*.json` under `platforms`

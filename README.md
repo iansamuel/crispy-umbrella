@@ -26,21 +26,3 @@ python marble_race.py
 
 ## Level Format (JSON)
 Levels live in `levels/` and define walls and spinning platforms.
-
-Example:
-```json
-{
-  "name": "default",
-  "walls": [
-    { "start": [50, 200], "end": [370, 500] }
-  ],
-  "platforms": [
-    { "pos": [280, 350], "length": 50, "angular_velocity": 2.0 }
-  ]
-}
-```
-
-## Capture Frames
-```bash
-python capture_simulation.py
-```

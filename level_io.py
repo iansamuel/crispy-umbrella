@@ -17,6 +17,13 @@ def get_default_emitter():
     }
 
 
+def list_levels():
+    """Return a list of all available level files (Paths)."""
+    if not LEVELS_DIR.exists():
+        return []
+    return sorted(list(LEVELS_DIR.glob("*.json")), key=lambda p: p.stem)
+
+
 def load_level(path):
     data = json.loads(Path(path).read_text())
     walls = []

@@ -4,7 +4,9 @@ import pymunk.pygame_util
 import random
 import colorsys
 import math
-from level_io import load_level, save_level, get_default_emitter, DEFAULT_LEVEL_PATH, LEVELS_DIR
+import argparse
+import sys
+from level_io import load_level, save_level, get_default_emitter, list_levels, DEFAULT_LEVEL_PATH, LEVELS_DIR
 
 # --- Configuration ---
 WIDTH, HEIGHT = 800, 800
@@ -181,8 +183,54 @@ class Slider:
         self._update_handle()
 
 
+class Checkbox:
+    """Checkbox control for boolean values."""
+    def __init__(self, x, y, size, label, initial_state=True):
+        self.rect = pygame.Rect(x, y, size, size)
+        self.label = label
+        self.checked = initial_state
+        self.font = pygame.font.SysFont("Arial", 14)
+        self.visible = True
+        self.color = (80, 80, 100)
+        self.check_color = (100, 200, 100)
+
+    def draw(self, screen):
+        if not self.visible:
+            return
+        # Draw box
+        pygame.draw.rect(screen, self.color, self.rect, border_radius=4)
+        pygame.draw.rect(screen, (150, 150, 150), self.rect, 2, border_radius=4)
+        
+        # Draw check
+        if self.checked:
+            inner_rect = self.rect.inflate(-6, -6)
+            pygame.draw.rect(screen, self.check_color, inner_rect, border_radius=2)
+            
+        # Draw label
+        label_surf = self.font.render(self.label, True, TEXT_COLOR)
+        # Vertically center label relative to box
+        label_y = self.rect.y + (self.rect.height - label_surf.get_height()) // 2
+        screen.blit(label_surf, (self.rect.right + 10, label_y))
+
+    def handle_event(self, event):
+        if not self.visible:
+            return False
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Check click on box or label
+            label_w = self.font.size(self.label)[0]
+            total_rect = self.rect.union(pygame.Rect(self.rect.right, self.rect.y, label_w + 10, self.rect.height))
+            if total_rect.collidepoint(event.pos):
+                self.checked = not self.checked
+                return True
+        return False
+    
+    def set_position(self, x, y):
+        self.rect.x = x
+        self.rect.y = y
+
+
 class MarbleSimulation:
-    def __init__(self):
+    def __init__(self, initial_level=None):
         pygame.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
         pygame.display.set_caption("Marble Funnel Simulation")
@@ -190,6 +238,11 @@ class MarbleSimulation:
         self.font = pygame.font.SysFont("Arial", 16)
         self.screen_width, self.screen_height = self.screen.get_size()
         self.prev_screen_size = (self.screen_width, self.screen_height)
+
+        # Level Management
+        self.level_files = list_levels()
+        self.current_level_index = 0
+        self.initial_level_name = initial_level
 
         # Simulation state: "ready", "running", "finished"
         self.state = "ready"
@@ -200,30 +253,37 @@ class MarbleSimulation:
         self.reset_button = Button(0, 0, 120, 40, "Reset")
         self.reset_button.visible = False
 
-        # Settings sliders (positioned at bottom left)
-        slider_x = 20
-        slider_width = 150
-        col2_x = slider_x + slider_width + 40
-        self.timer_slider = Slider(slider_x, HEIGHT - 180, slider_width,
-                                   "Timer (sec)", 1, 60, 30, "{:.0f}")
-        self.gravity_slider = Slider(slider_x, HEIGHT - 140, slider_width,
-                                     "Gravity", 0, 1000, GRAVITY, "{:.0f}")
-        self.bounce_slider = Slider(slider_x, HEIGHT - 100, slider_width,
-                                    "Bounciness", 0.5, 2.0, ELASTICITY, "{:.2f}")
-        self.speed_slider = Slider(col2_x, HEIGHT - 180, slider_width,
-                                   "Speed", 0.25, 1.5, 0.75, "{:.2f}")
-        self.emit_rate_slider = Slider(col2_x, HEIGHT - 140, slider_width,
-                                       "Emit Rate", 1, 50, 20, "{:.0f}")
-        self.marble_count_slider = Slider(col2_x, HEIGHT - 100, slider_width,
-                                          "Marble Count", 10, 200, 100, "{:.0f}")
+        # Level selection buttons
+        self.prev_level_btn = Button(20, 50, 40, 30, "<")
+        self.next_level_btn = Button(200, 50, 40, 30, ">")
 
-        self.sliders = [self.timer_slider, self.gravity_slider,
-                        self.bounce_slider, self.speed_slider,
-                        self.emit_rate_slider, self.marble_count_slider]
+        # Sidebar configuration
+        self.SIDEBAR_WIDTH = 250
+        self.sidebar_padding = 20
+
+        # Settings sliders (positioned in sidebar)
+        slider_width = self.SIDEBAR_WIDTH - 2 * self.sidebar_padding
+        self.timer_slider = Slider(0, 0, slider_width, "Timer (sec)", 1, 60, 30, "{:.0f}")
+        self.gravity_slider = Slider(0, 0, slider_width, "Gravity", 0, 1000, GRAVITY, "{:.0f}")
+        self.bounce_slider = Slider(0, 0, slider_width, "Bounciness", 0.5, 2.0, ELASTICITY, "{:.2f}")
+        self.speed_slider = Slider(0, 0, slider_width, "Speed", 0.25, 1.5, 0.75, "{:.2f}")
+        self.emit_rate_slider = Slider(0, 0, slider_width, "Emit Rate", 1, 50, 20, "{:.0f}")
+        self.marble_count_slider = Slider(0, 0, slider_width, "Marble Count", 10, 200, 100, "{:.0f}")
+        
+        self.sliders = [
+            self.timer_slider, self.gravity_slider, self.bounce_slider, 
+            self.speed_slider, self.emit_rate_slider, self.marble_count_slider
+        ]
+        
+        self.random_shape_cb = Checkbox(0, 0, 20, "Randomize Shape", initial_state=True)
+        self.random_color_cb = Checkbox(0, 0, 20, "Randomize Color", initial_state=True)
+        self.random_size_cb = Checkbox(0, 0, 20, "Randomize Size", initial_state=True)
+        
+        self.checkboxes = [self.random_shape_cb, self.random_color_cb, self.random_size_cb]
 
         self.update_viewport()
         self.layout_ui()
-
+        
         self.default_level_path = DEFAULT_LEVEL_PATH
         self.edited_level_path = LEVELS_DIR / "edited.json"
         self.level_name = "level"
@@ -262,35 +322,82 @@ class MarbleSimulation:
         self.emit_rate = self.emit_rate_slider.value
         self.marble_count = int(self.marble_count_slider.value)
 
+        # Initial Level Load
         if not self.level_walls:
-            self.load_level(self.default_level_path)
+            if self.initial_level_name:
+                # Find index of requested level
+                found = False
+                for i, path in enumerate(self.level_files):
+                    if path.stem == self.initial_level_name:
+                        self.current_level_index = i
+                        found = True
+                        break
+                if not found:
+                    print(f"Level '{self.initial_level_name}' not found, loading random.")
+                    self.current_level_index = random.randint(0, len(self.level_files) - 1)
+            else:
+                # Random level on startup
+                if self.level_files:
+                    self.current_level_index = random.randint(0, len(self.level_files) - 1)
+            
+            self.load_level_by_index(self.current_level_index)
         else:
             self.rebuild_walls()
+        
         self.create_rotating_platforms()
         self.prepare_marble_queue()
 
+    def load_level_by_index(self, index):
+        if not self.level_files:
+            return
+        self.current_level_index = index % len(self.level_files)
+        path = self.level_files[self.current_level_index]
+        self.load_level(path)
+
     def update_viewport(self):
         self.screen_width, self.screen_height = self.screen.get_size()
-        self.scale = min(self.screen_width / WIDTH, self.screen_height / HEIGHT)
+        
+        # Calculate available space for simulation (everything right of sidebar)
+        available_width = self.screen_width - self.SIDEBAR_WIDTH
+        
+        self.scale = min(available_width / WIDTH, self.screen_height / HEIGHT)
         self.scaled_width = int(WIDTH * self.scale)
         self.scaled_height = int(HEIGHT * self.scale)
-        self.offset_x = (self.screen_width - self.scaled_width) // 2
+        
+        # Center in the available space to the right
+        self.offset_x = self.SIDEBAR_WIDTH + (available_width - self.scaled_width) // 2
         self.offset_y = (self.screen_height - self.scaled_height) // 2
+        
         if (self.screen_width, self.screen_height) != self.prev_screen_size:
             self.prev_screen_size = (self.screen_width, self.screen_height)
             self.layout_ui()
 
     def layout_ui(self):
-        self.start_button.set_center(self.screen_width // 2, self.screen_height - 40)
-        self.reset_button.set_center(self.screen_width // 2, self.screen_height - 40)
-
-        slider_x = 20
-        slider_width = self.timer_slider.width
-        base_y = self.screen_height - 180
-        self.timer_slider.set_position(slider_x, base_y)
-        self.gravity_slider.set_position(slider_x, base_y + 40)
-        self.bounce_slider.set_position(slider_x, base_y + 80)
-        self.speed_slider.set_position(slider_x + slider_width + 40, base_y)
+        # Buttons center relative to the sidebar or available space? 
+        # Original was bottom center of screen. Let's put Start/Reset at bottom of sidebar.
+        
+        sidebar_center = self.SIDEBAR_WIDTH // 2
+        
+        # Level navigation at top of sidebar
+        self.prev_level_btn.rect.topleft = (self.sidebar_padding, 20)
+        self.next_level_btn.rect.topright = (self.SIDEBAR_WIDTH - self.sidebar_padding, 20)
+        
+        # Sliders starting below level nav
+        start_y = 100
+        gap = 45
+        
+        for i, slider in enumerate(self.sliders):
+            slider.set_position(self.sidebar_padding, start_y + i * gap)
+            
+        # Checkboxes below sliders
+        checkbox_y = start_y + len(self.sliders) * gap + 10
+        cb_gap = 25
+        for i, cb in enumerate(self.checkboxes):
+            cb.set_position(self.sidebar_padding, checkbox_y + i * cb_gap)
+            
+        # Action buttons at bottom of sidebar
+        self.start_button.set_center(sidebar_center, self.screen_height - 60)
+        self.reset_button.set_center(sidebar_center, self.screen_height - 60)
 
     def screen_to_world(self, pos):
         x, y = pos
@@ -351,23 +458,41 @@ class MarbleSimulation:
         self.prepare_marble_queue_with_count(count)
 
     def prepare_marble_queue_with_count(self, count):
-        """Prepares marble definitions with a specific count, ensuring unique names."""
-        shape_types = [0, 3, 4, 5, 6]
+        """Prepares marble definitions with a specific count."""
+        
+        rand_shape = self.random_shape_cb.checked
+        rand_color = self.random_color_cb.checked
+        rand_size = self.random_size_cb.checked
 
-        # Generate all possible unique color+shape combinations
-        # We have 13 color names and 5 shapes = 65 base combinations
-        # Add numbered variants if we need more
+        shape_types = [0, 3, 4, 5, 6]
         color_names = ["Red", "Orange", "Gold", "Yellow", "Lime", "Green",
                        "Teal", "Cyan", "Sky", "Blue", "Purple", "Magenta", "Pink"]
 
+        # Determine available pools based on settings
+        if rand_shape:
+            avail_shapes = shape_types
+        else:
+            avail_shapes = [0] # Circle only
+
+        if rand_color:
+            avail_colors = color_names
+        else:
+            avail_colors = ["Red"]
+
+        # Generate unique marbles from the available pools
         all_combinations = []
-        for color_name in color_names:
-            for shape_type in shape_types:
+        for color_name in avail_colors:
+            for shape_type in avail_shapes:
                 shape_name = SHAPE_NAMES[shape_type]
-                # Calculate hue from color name for the actual color
-                hue = color_names.index(color_name) / len(color_names)
-                r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 1.0)
-                color = (int(r * 255), int(g * 255), int(b * 255))
+                # Calculate color
+                if color_name == "Red" and not rand_color:
+                    # Pure Red
+                    color = (255, 0, 0)
+                else:
+                    hue = color_names.index(color_name) / len(color_names)
+                    r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 1.0)
+                    color = (int(r * 255), int(g * 255), int(b * 255))
+                
                 all_combinations.append({
                     'color_name': color_name,
                     'shape_type': shape_type,
@@ -376,36 +501,81 @@ class MarbleSimulation:
                     'base_name': f"{color_name} {shape_name}",
                 })
 
-        # If we need more than base combinations, add numbered variants
-        if count > len(all_combinations):
-            extended = []
-            num_needed = (count // len(all_combinations)) + 1
-            for variant in range(num_needed):
-                for combo in all_combinations:
-                    suffix = f" #{variant + 1}" if variant > 0 else ""
-                    extended.append({
-                        **combo,
-                        'name': combo['base_name'] + suffix,
-                    })
-            all_combinations = extended
-        else:
-            for combo in all_combinations:
-                combo['name'] = combo['base_name']
-
-        # Randomly sample without replacement
-        selected = random.sample(all_combinations, count)
-
+        # Sample or repeat to fill count
         self.marble_queue = []
-        for i, combo in enumerate(selected):
-            radius = MARBLE_RADIUS * random.uniform(0.8, 1.2)
-
-            self.marble_queue.append({
-                'id': i + 1,
-                'radius': radius,
-                'shape_type': combo['shape_type'],
-                'color': combo['color'],
-                'name': combo['name'],
-            })
+        
+        # If we have enough unique combos, sample them. 
+        # If we don't (e.g. fixed shape/color), we loop and add numbers.
+        
+        for i in range(count):
+            # Pick a base combo (round robin or random)
+            # Use random choice to keep distribution even but random order
+            combo = random.choice(all_combinations)
+            
+            # Determine Name
+            # If we are reusing combos frequently (small pool), add numbers
+            # If pool is large enough for unique sample, we could do that, but simple approach:
+            # Always number if count > len(all_combinations) OR just number sequentially if pools are small?
+            
+            # Let's count occurrences of this base name so far? Too slow.
+            # Simplified: Just append index + 1 if pool is small.
+            if len(all_combinations) < count:
+                 name = f"{combo['base_name']} #{i+1}"
+            else:
+                # We can try to be unique
+                # But 'random.choice' allows duplicates. 'random.sample' doesn't.
+                # If pool > count, use sample.
+                pass 
+        
+        # Rework selection strategy:
+        if len(all_combinations) >= count:
+            selected_bases = random.sample(all_combinations, count)
+            for combo in selected_bases:
+                radius = MARBLE_RADIUS * random.uniform(0.8, 1.2) if rand_size else MARBLE_RADIUS
+                self.marble_queue.append({
+                    'id': len(self.marble_queue) + 1,
+                    'radius': radius,
+                    'shape_type': combo['shape_type'],
+                    'color': combo['color'],
+                    'name': combo['base_name'],
+                })
+        else:
+            # Pool is smaller than count, we must duplicate.
+            # Cycle through all combinations to ensure even distribution, then shuffle order.
+            base_list = []
+            num_full_cycles = count // len(all_combinations)
+            remainder = count % len(all_combinations)
+            
+            for _ in range(num_full_cycles):
+                base_list.extend(all_combinations)
+            base_list.extend(random.sample(all_combinations, remainder))
+            
+            random.shuffle(base_list)
+            
+            # Now assign names with numbers
+            # We need to track count per type to number them cleanly? 
+            # Or just globally number? "Red Circle #1", "Red Circle #2"
+            type_counts = {}
+            
+            for combo in base_list:
+                t_name = combo['base_name']
+                type_counts[t_name] = type_counts.get(t_name, 0) + 1
+                number = type_counts[t_name]
+                
+                radius = MARBLE_RADIUS * random.uniform(0.8, 1.2) if rand_size else MARBLE_RADIUS
+                
+                # If there's only one of this type total, don't add number?
+                # But here we know we are likely duplicating.
+                # Actually, if we have 100 Red Circles, we definitely need numbers.
+                name_suffix = f" #{number}"
+                
+                self.marble_queue.append({
+                    'id': len(self.marble_queue) + 1,
+                    'radius': radius,
+                    'shape_type': combo['shape_type'],
+                    'color': combo['color'],
+                    'name': t_name + name_suffix,
+                })
 
     def emit_marble(self):
         """Emit a single marble from the emitter."""
@@ -492,10 +662,27 @@ class MarbleSimulation:
                 if self.state == "ready":
                     for slider in self.sliders:
                         slider.handle_event(event)
+                    
+                    queue_changed = False
+                    for cb in self.checkboxes:
+                        if cb.handle_event(event):
+                            queue_changed = True
+                            
+                    if queue_changed:
+                        # Regenerate queue if any checkbox toggled
+                        self.prepare_marble_queue_with_count(int(self.marble_count_slider.value))
 
                 # Handle button clicks
-                if self.state == "ready" and self.start_button.is_clicked(event):
-                    self.start_simulation()
+                if self.state == "ready":
+                    if self.start_button.is_clicked(event):
+                        self.start_simulation()
+                    elif self.prev_level_btn.is_clicked(event):
+                        self.load_level_by_index(self.current_level_index - 1)
+                        self.reset_simulation()
+                    elif self.next_level_btn.is_clicked(event):
+                        self.load_level_by_index(self.current_level_index + 1)
+                        self.reset_simulation()
+                
                 elif self.state == "finished" and self.reset_button.is_clicked(event):
                     self.reset_simulation()
                 elif self.state == "edit":
@@ -521,8 +708,11 @@ class MarbleSimulation:
             if self.state == "ready":
                 for slider in self.sliders:
                     slider.draw(self.screen)
+                for cb in self.checkboxes:
+                    cb.draw(self.screen)
                 self.start_button.draw(self.screen)
                 self.draw_status(self.screen)
+                self.draw_level_selection(self.screen)
             elif self.state == "running":
                 self.draw_status(self.screen)
             elif self.state == "finished":
@@ -827,7 +1017,8 @@ class MarbleSimulation:
         total_count = getattr(self, 'marble_count', int(self.marble_count_slider.value))
         status_text = f"Emitted: {self.marbles_emitted}/{total_count}  Finished: {len(self.finished_rank)}/{total_count}"
         surf = self.font.render(status_text, True, TEXT_COLOR)
-        surface.blit(surf, (10, 10))
+        # Position at (offset_x + 10, 10) to be in top-left of game area
+        surface.blit(surf, (self.offset_x + 10, 10))
 
         if self.state == "running":
             minutes = int(self.time_remaining // 60)
@@ -896,6 +1087,19 @@ class MarbleSimulation:
                 rank_text = small_font.render(f"#{i+1} {m['name']}", True, (200, 200, 200))
             surface.blit(rank_text, (x + int(display_radius) + 4, y - best_font_size // 2))
 
+    def draw_level_selection(self, surface):
+        """Draw level selection UI."""
+        self.prev_level_btn.draw(surface)
+        self.next_level_btn.draw(surface)
+        
+        # Draw level name centered in sidebar
+        level_text = f"Level: {self.level_name}"
+        text_surf = self.font.render(level_text, True, TEXT_COLOR)
+        
+        center_x = self.SIDEBAR_WIDTH // 2
+        text_rect = text_surf.get_rect(center=(center_x, 35))
+        surface.blit(text_surf, text_rect)
+
     def draw_editor(self, surface):
         # Draw emitter
         self.draw_emitter(surface)
@@ -942,5 +1146,9 @@ class MarbleSimulation:
 
 
 if __name__ == "__main__":
-    sim = MarbleSimulation()
+    parser = argparse.ArgumentParser(description="Marble Race Simulation")
+    parser.add_argument("--level", type=str, help="Name of the level to load (without .json)")
+    args = parser.parse_args()
+
+    sim = MarbleSimulation(initial_level=args.level)
     sim.run()

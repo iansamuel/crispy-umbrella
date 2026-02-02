@@ -654,6 +654,7 @@ class LevelEditor:
 
         # Load default level
         self.load_level(DEFAULT_LEVEL_PATH)
+        self.update_property_fields()
 
     def update_layout(self):
         """Update layout dimensions based on window size."""
@@ -926,8 +927,12 @@ class LevelEditor:
             self.save_level()
             return True
         if self.save_as_button.is_clicked(event):
-            # Simple save as: save to "edited.json"
-            new_path = LEVELS_DIR / "edited.json"
+            # Save to filename matching level name
+            safe_name = "".join([c for c in self.level_name if c.isalnum() or c in (' ', '_', '-')]).strip()
+            safe_name = safe_name.replace(' ', '_').lower()
+            if not safe_name:
+                safe_name = "untitled"
+            new_path = LEVELS_DIR / f"{safe_name}.json"
             self.save_level(new_path)
             return True
 
@@ -935,6 +940,7 @@ class LevelEditor:
         for btn, path in self.level_buttons:
             if btn.is_clicked(event):
                 self.load_level(path)
+                self.update_property_fields() # Refresh global fields
                 return True
 
         # Handle property field inputs
@@ -1193,6 +1199,11 @@ class LevelEditor:
             self.prop_fields['emit_speed'] = InputField(prop_x, prop_y + 6*field_gap, field_w, field_h, "Speed")
             self.prop_fields['emit_speed'].set_value(self.emitter['speed'])
 
+        else:
+            # Global settings / Level name
+            self.prop_fields['level_name'] = InputField(prop_x, prop_y, field_w, field_h, "Level Name")
+            self.prop_fields['level_name'].set_value(self.level_name)
+
     def apply_property_changes(self):
         """Apply changes from property fields to the selected element."""
         if self.selected_wall is not None and self.selected_wall < len(self.walls):
@@ -1226,6 +1237,11 @@ class LevelEditor:
                 self.emitter['rate'] = self.prop_fields['emit_rate'].get_float()
                 self.emitter['count'] = int(self.prop_fields['emit_count'].get_float())
                 self.emitter['speed'] = self.prop_fields['emit_speed'].get_float()
+                self.modified = True
+        
+        else:
+            if 'level_name' in self.prop_fields:
+                self.level_name = self.prop_fields['level_name'].value
                 self.modified = True
 
     def draw_emitter(self, surface):
@@ -1374,7 +1390,7 @@ class LevelEditor:
         elif self.selected_emitter:
             info = "Entry Pipe"
         else:
-            info = "Nothing selected"
+            info = "Global Settings"
         info_surf = self.small_font.render(info, True, (150, 150, 150))
         self.screen.blit(info_surf, (prop_panel_x + 15, MENU_BAR_HEIGHT + 40))
 
