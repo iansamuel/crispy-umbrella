@@ -351,25 +351,60 @@ class MarbleSimulation:
         self.prepare_marble_queue_with_count(count)
 
     def prepare_marble_queue_with_count(self, count):
-        """Prepares marble definitions with a specific count."""
+        """Prepares marble definitions with a specific count, ensuring unique names."""
         shape_types = [0, 3, 4, 5, 6]
 
+        # Generate all possible unique color+shape combinations
+        # We have 13 color names and 5 shapes = 65 base combinations
+        # Add numbered variants if we need more
+        color_names = ["Red", "Orange", "Gold", "Yellow", "Lime", "Green",
+                       "Teal", "Cyan", "Sky", "Blue", "Purple", "Magenta", "Pink"]
+
+        all_combinations = []
+        for color_name in color_names:
+            for shape_type in shape_types:
+                shape_name = SHAPE_NAMES[shape_type]
+                # Calculate hue from color name for the actual color
+                hue = color_names.index(color_name) / len(color_names)
+                r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 1.0)
+                color = (int(r * 255), int(g * 255), int(b * 255))
+                all_combinations.append({
+                    'color_name': color_name,
+                    'shape_type': shape_type,
+                    'shape_name': shape_name,
+                    'color': color,
+                    'base_name': f"{color_name} {shape_name}",
+                })
+
+        # If we need more than base combinations, add numbered variants
+        if count > len(all_combinations):
+            extended = []
+            num_needed = (count // len(all_combinations)) + 1
+            for variant in range(num_needed):
+                for combo in all_combinations:
+                    suffix = f" #{variant + 1}" if variant > 0 else ""
+                    extended.append({
+                        **combo,
+                        'name': combo['base_name'] + suffix,
+                    })
+            all_combinations = extended
+        else:
+            for combo in all_combinations:
+                combo['name'] = combo['base_name']
+
+        # Randomly sample without replacement
+        selected = random.sample(all_combinations, count)
+
         self.marble_queue = []
-        for i in range(count):
+        for i, combo in enumerate(selected):
             radius = MARBLE_RADIUS * random.uniform(0.8, 1.2)
-            shape_type = random.choice(shape_types)
-            hue = i / count
-            color = get_rainbow_color(i, count)
-            color_name = get_color_name(hue)
-            shape_name = SHAPE_NAMES[shape_type]
-            name = f"{color_name} {shape_name}"
 
             self.marble_queue.append({
                 'id': i + 1,
                 'radius': radius,
-                'shape_type': shape_type,
-                'color': color,
-                'name': name,
+                'shape_type': combo['shape_type'],
+                'color': combo['color'],
+                'name': combo['name'],
             })
 
     def emit_marble(self):
@@ -807,24 +842,64 @@ class MarbleSimulation:
         title = self.font.render("SIMULATION COMPLETE - RANK ORDER", True, TEXT_COLOR)
         surface.blit(title, (self.screen_width // 2 - title.get_width() // 2, 20))
 
-        # Grid settings for displaying results
+        total = len(self.finished_rank)
+        if total == 0:
+            return
+
+        # Calculate optimal grid layout based on count and screen size
+        available_width = self.screen_width - 60  # margins
+        available_height = self.screen_height - 120  # title + button area
+
+        # Determine columns and rows needed
+        # Try different column counts and pick the one that fits best
+        best_cols = 5
+        best_font_size = 12
+        best_padding_x = 155
+        best_padding_y = 35
+
+        for cols in range(3, 10):
+            rows = (total + cols - 1) // cols
+            padding_x = available_width // cols
+            padding_y = available_height // max(rows, 1)
+
+            # Clamp padding to reasonable values
+            padding_x = min(padding_x, 180)
+            padding_y = min(padding_y, 40)
+
+            # Calculate font size based on available space
+            font_size = min(12, padding_y // 3, padding_x // 14)
+            font_size = max(6, font_size)  # minimum readable size
+
+            # Check if this layout fits
+            needed_height = rows * padding_y
+            if needed_height <= available_height and padding_y >= 18:
+                best_cols = cols
+                best_font_size = font_size
+                best_padding_x = padding_x
+                best_padding_y = padding_y
+                break
+
+        # If still too many rows, compress further
+        rows = (total + best_cols - 1) // best_cols
+        if rows * best_padding_y > available_height:
+            best_padding_y = max(15, available_height // rows)
+            best_font_size = max(6, min(best_font_size, best_padding_y // 3))
+
         start_x = 30
         start_y = 60
-        cols = 5
-        padding_x = 155
-        padding_y = 35
-
-        small_font = pygame.font.SysFont("Arial", 12)
+        small_font = pygame.font.SysFont("Arial", best_font_size)
+        display_scale = best_padding_y / 35  # scale marble display size
 
         for i, m in enumerate(self.finished_rank):
-            row = i // cols
-            col = i % cols
+            row = i // best_cols
+            col = i % best_cols
 
-            x = start_x + col * padding_x
-            y = start_y + row * padding_y
+            x = start_x + col * best_padding_x
+            y = start_y + row * best_padding_y
 
-            # Draw the marble (scaled up for display)
-            display_radius = m['radius'] * 1.2
+            # Draw the marble (scaled based on layout)
+            display_radius = m['radius'] * 1.2 * display_scale
+            display_radius = max(3, min(display_radius, 10))  # clamp size
             if m['shape_type'] == 0:  # Circle
                 pygame.draw.circle(surface, m['color'], (x, y), int(display_radius))
             else:  # Polygon
@@ -837,7 +912,7 @@ class MarbleSimulation:
                 rank_text = small_font.render(f"DNF {m['name']}", True, (255, 100, 100))
             else:
                 rank_text = small_font.render(f"#{i+1} {m['name']}", True, (200, 200, 200))
-            surface.blit(rank_text, (x + 12, y - 6))
+            surface.blit(rank_text, (x + int(display_radius) + 4, y - best_font_size // 2))
 
     def draw_editor(self, surface):
         # Draw emitter
