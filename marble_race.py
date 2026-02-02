@@ -4,7 +4,7 @@ import pymunk.pygame_util
 import random
 import colorsys
 import math
-from level_io import load_level, save_level, DEFAULT_LEVEL_PATH, LEVELS_DIR
+from level_io import load_level, save_level, get_default_emitter, DEFAULT_LEVEL_PATH, LEVELS_DIR
 
 # --- Configuration ---
 WIDTH, HEIGHT = 800, 800
@@ -223,6 +223,7 @@ class MarbleSimulation:
         self.level_name = "level"
         self.level_walls = []
         self.level_platforms = []
+        self.level_emitter = get_default_emitter()
         self.wall_shapes = []
         self.platform_templates = [
             {"length": 50, "angular_velocity": 2.0},
@@ -248,12 +249,17 @@ class MarbleSimulation:
         self.marbles = []       # List of marble data
         self.finished_rank = []  # List of marble data in order of finish
 
+        # Emitter state
+        self.marbles_emitted = 0
+        self.emit_accumulator = 0.0  # Accumulates time for emission timing
+        self.marble_queue = []  # Pre-generated marble definitions to emit
+
         if not self.level_walls:
             self.load_level(self.default_level_path)
         else:
             self.rebuild_walls()
         self.create_rotating_platforms()
-        self.spawn_marbles()
+        self.prepare_marble_queue()
 
     def update_viewport(self):
         self.screen_width, self.screen_height = self.screen.get_size()
@@ -291,6 +297,7 @@ class MarbleSimulation:
         self.level_name = level.get("name", "level")
         self.level_walls = list(level.get("walls", []))
         self.level_platforms = list(level.get("platforms", []))
+        self.level_emitter = level.get("emitter", get_default_emitter())
         self.rebuild_walls()
 
     def create_rotating_platforms(self):
@@ -330,63 +337,92 @@ class MarbleSimulation:
             self.space.add(shape)
             self.wall_shapes.append(shape)
 
-    def spawn_marbles(self):
-        """Creates 100 marbles in a grid pattern above the center platform."""
-        # Spawn centered above the platform (platform is 120px wide at center)
-        start_x = WIDTH // 2 - 70  # Narrower spawn area
-        start_y = 50
-        cols = 10
-        spacing = MARBLE_RADIUS * 2 + 2
-
-        # Shape types: 0=circle, 3=triangle, 4=square, 5=pentagon, 6=hexagon
+    def prepare_marble_queue(self):
+        """Prepares marble definitions to be emitted during simulation."""
+        count = self.level_emitter.get("count", MARBLE_COUNT)
         shape_types = [0, 3, 4, 5, 6]
 
-        for i in range(MARBLE_COUNT):
-            row = i // cols
-            col = i % cols
-
-            x = start_x + (col * spacing) + random.uniform(-5, 5)  # Slight jitter
-            y = start_y + (row * spacing)
-
-            # Randomly vary the radius slightly (80% to 120% of base)
+        self.marble_queue = []
+        for i in range(count):
             radius = MARBLE_RADIUS * random.uniform(0.8, 1.2)
             shape_type = random.choice(shape_types)
-
-            mass = 1
-            if shape_type == 0:  # Circle
-                moment = pymunk.moment_for_circle(mass, 0, radius)
-                body = pymunk.Body(mass, moment)
-                body.position = (x, y)
-                shape = pymunk.Circle(body, radius)
-            else:  # Polygon
-                vertices = get_polygon_vertices(shape_type, radius)
-                moment = pymunk.moment_for_poly(mass, vertices)
-                body = pymunk.Body(mass, moment)
-                body.position = (x, y)
-                shape = pymunk.Poly(body, vertices)
-
-            shape.elasticity = ELASTICITY
-            shape.friction = FRICTION
-
-            hue = i / MARBLE_COUNT
-            color = get_rainbow_color(i, MARBLE_COUNT)
+            hue = i / count
+            color = get_rainbow_color(i, count)
             color_name = get_color_name(hue)
             shape_name = SHAPE_NAMES[shape_type]
             name = f"{color_name} {shape_name}"
 
-            self.space.add(body, shape)
-
-            # Store metadata
-            self.marbles.append({
-                'body': body,
-                'shape': shape,
-                'color': color,
+            self.marble_queue.append({
                 'id': i + 1,
-                'active': True,
-                'shape_type': shape_type,
                 'radius': radius,
-                'name': name
+                'shape_type': shape_type,
+                'color': color,
+                'name': name,
             })
+
+    def emit_marble(self):
+        """Emit a single marble from the emitter."""
+        if not self.marble_queue:
+            return False
+
+        emitter = self.level_emitter
+        marble_def = self.marble_queue.pop(0)
+
+        # Calculate spawn position within emitter width
+        ex, ey = emitter["pos"]
+        width = emitter["width"]
+        angle_deg = emitter["angle"]
+        speed = emitter["speed"]
+
+        # Random position along the emitter width
+        offset = random.uniform(-width / 2, width / 2)
+
+        # Perpendicular to emission direction for width spread
+        angle_rad = math.radians(angle_deg)
+        perp_angle = angle_rad - math.pi / 2
+
+        x = ex + offset * math.cos(perp_angle)
+        y = ey + offset * math.sin(perp_angle)
+
+        # Initial velocity in emission direction
+        vx = speed * math.cos(angle_rad)
+        vy = speed * math.sin(angle_rad)
+
+        radius = marble_def['radius']
+        shape_type = marble_def['shape_type']
+
+        mass = 1
+        if shape_type == 0:  # Circle
+            moment = pymunk.moment_for_circle(mass, 0, radius)
+            body = pymunk.Body(mass, moment)
+            body.position = (x, y)
+            shape = pymunk.Circle(body, radius)
+        else:  # Polygon
+            vertices = get_polygon_vertices(shape_type, radius)
+            moment = pymunk.moment_for_poly(mass, vertices)
+            body = pymunk.Body(mass, moment)
+            body.position = (x, y)
+            shape = pymunk.Poly(body, vertices)
+
+        body.velocity = (vx, vy)
+        shape.elasticity = self.bounce_slider.value
+        shape.friction = FRICTION
+
+        self.space.add(body, shape)
+
+        self.marbles.append({
+            'body': body,
+            'shape': shape,
+            'color': marble_def['color'],
+            'id': marble_def['id'],
+            'active': True,
+            'shape_type': shape_type,
+            'radius': radius,
+            'name': marble_def['name'],
+        })
+
+        self.marbles_emitted += 1
+        return True
 
     def run(self):
         while True:
@@ -496,7 +532,7 @@ class MarbleSimulation:
             elif event.key == pygame.K_r:
                 self.load_level(self.default_level_path)
             elif event.key == pygame.K_s:
-                save_level(self.edited_level_path, self.level_walls, self.level_platforms, name="edited")
+                save_level(self.edited_level_path, self.level_walls, self.level_platforms, self.level_emitter, name="edited")
             elif event.key == pygame.K_l:
                 if self.edited_level_path.exists():
                     self.load_level(self.edited_level_path)
@@ -616,6 +652,15 @@ class MarbleSimulation:
         dt = self.sim_speed / FPS
         self.space.step(dt)
 
+        # Emit marbles from the emitter
+        if self.marble_queue:
+            rate = self.level_emitter.get("rate", 20.0)
+            self.emit_accumulator += dt
+            emit_interval = 1.0 / rate
+            while self.emit_accumulator >= emit_interval and self.marble_queue:
+                self.emit_marble()
+                self.emit_accumulator -= emit_interval
+
         # Check for marbles exiting the bottom
         # We iterate backwards to allow safe removal from the list
         for i in range(len(self.marbles) - 1, -1, -1):
@@ -633,17 +678,64 @@ class MarbleSimulation:
         elapsed = (pygame.time.get_ticks() - self.start_time) / 1000.0
         self.time_remaining = max(0, self.time_limit - elapsed)
 
+        # Total marble count from emitter
+        total_count = self.level_emitter.get("count", MARBLE_COUNT)
+
         # Check if all marbles are done or time is up
-        if len(self.finished_rank) == MARBLE_COUNT:
+        if len(self.finished_rank) == total_count:
             self.state = "finished"
             self.reset_button.visible = True
         elif self.time_remaining <= 0:
             # Time's up - remaining marbles tie for last
             self.end_with_timeout()
 
+    def draw_emitter(self, surface):
+        """Draw the emitter/entry pipe."""
+        emitter = self.level_emitter
+        ex, ey = emitter["pos"]
+        width = emitter["width"]
+        angle_deg = emitter["angle"]
+
+        angle_rad = math.radians(angle_deg)
+        perp_angle = angle_rad - math.pi / 2
+
+        # Calculate pipe endpoints
+        half_width = width / 2
+        pipe_length = 30  # Visual length of the pipe
+
+        # Left and right edges of the pipe opening
+        left_x = ex + half_width * math.cos(perp_angle)
+        left_y = ey + half_width * math.sin(perp_angle)
+        right_x = ex - half_width * math.cos(perp_angle)
+        right_y = ey - half_width * math.sin(perp_angle)
+
+        # Back of pipe (opposite direction of emission)
+        back_dx = -pipe_length * math.cos(angle_rad)
+        back_dy = -pipe_length * math.sin(angle_rad)
+
+        # Draw pipe as a polygon
+        pipe_color = (100, 120, 180)
+        points = [
+            (left_x, left_y),
+            (right_x, right_y),
+            (right_x + back_dx, right_y + back_dy),
+            (left_x + back_dx, left_y + back_dy),
+        ]
+        pygame.draw.polygon(surface, pipe_color, points)
+        pygame.draw.polygon(surface, (150, 170, 220), points, 2)
+
+        # Draw emission direction indicator
+        arrow_len = 15
+        arrow_x = ex + arrow_len * math.cos(angle_rad)
+        arrow_y = ey + arrow_len * math.sin(angle_rad)
+        pygame.draw.line(surface, (200, 220, 255), (ex, ey), (arrow_x, arrow_y), 2)
+
     def draw_simulation(self, surface):
         # Draw Funnel Lines (Pymunk debug draw handles this, but let's make it cleaner)
         # We manually draw marbles to control their colors
+
+        # 0. Draw Emitter
+        self.draw_emitter(surface)
 
         # 1. Draw Funnel (Static shapes)
         for shape in self.space.shapes:
@@ -679,7 +771,8 @@ class MarbleSimulation:
                     pygame.draw.polygon(surface, (0, 0, 0), points, 1)
 
     def draw_status(self, surface):
-        status_text = f"Finished: {len(self.finished_rank)} / {MARBLE_COUNT}"
+        total_count = self.level_emitter.get("count", MARBLE_COUNT)
+        status_text = f"Emitted: {self.marbles_emitted}/{total_count}  Finished: {len(self.finished_rank)}/{total_count}"
         surf = self.font.render(status_text, True, TEXT_COLOR)
         surface.blit(surf, (10, 10))
 
@@ -729,6 +822,9 @@ class MarbleSimulation:
             surface.blit(rank_text, (x + 12, y - 6))
 
     def draw_editor(self, surface):
+        # Draw emitter
+        self.draw_emitter(surface)
+
         # Draw existing walls
         for start, end in self.level_walls:
             pygame.draw.line(

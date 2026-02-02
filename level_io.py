@@ -5,6 +5,18 @@ LEVELS_DIR = Path(__file__).resolve().parent / "levels"
 DEFAULT_LEVEL_PATH = LEVELS_DIR / "default.json"
 
 
+def get_default_emitter():
+    """Return a default emitter configuration."""
+    return {
+        "pos": (400.0, 80.0),
+        "angle": 90.0,  # degrees, 90 = straight down
+        "width": 60.0,  # opening width in pixels
+        "rate": 20.0,  # marbles per second
+        "count": 100,  # total marbles to emit
+        "speed": 50.0,  # initial velocity magnitude
+    }
+
+
 def load_level(path):
     data = json.loads(Path(path).read_text())
     walls = []
@@ -20,11 +32,29 @@ def load_level(path):
             "length": float(platform.get("length", 40)),
             "angular_velocity": float(platform.get("angular_velocity", 0.0)),
         })
-    return {"name": data.get("name", "level"), "walls": walls, "platforms": platforms}
+
+    # Load emitter (use default if not present)
+    emitter_data = data.get("emitter", None)
+    if emitter_data:
+        pos = emitter_data.get("pos", [400, 80])
+        emitter = {
+            "pos": (float(pos[0]), float(pos[1])),
+            "angle": float(emitter_data.get("angle", 90.0)),
+            "width": float(emitter_data.get("width", 60.0)),
+            "rate": float(emitter_data.get("rate", 20.0)),
+            "count": int(emitter_data.get("count", 100)),
+            "speed": float(emitter_data.get("speed", 50.0)),
+        }
+    else:
+        emitter = get_default_emitter()
+
+    return {"name": data.get("name", "level"), "walls": walls, "platforms": platforms, "emitter": emitter}
 
 
-def save_level(path, walls, platforms, name="level"):
+def save_level(path, walls, platforms, emitter=None, name="level"):
     LEVELS_DIR.mkdir(parents=True, exist_ok=True)
+    if emitter is None:
+        emitter = get_default_emitter()
     payload = {
         "name": name,
         "walls": [
@@ -42,5 +72,13 @@ def save_level(path, walls, platforms, name="level"):
             }
             for p in platforms
         ],
+        "emitter": {
+            "pos": [int(round(emitter["pos"][0])), int(round(emitter["pos"][1]))],
+            "angle": float(emitter["angle"]),
+            "width": float(emitter["width"]),
+            "rate": float(emitter["rate"]),
+            "count": int(emitter["count"]),
+            "speed": float(emitter["speed"]),
+        },
     }
     Path(path).write_text(json.dumps(payload, indent=2) + "\n")

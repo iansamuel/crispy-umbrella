@@ -3,6 +3,7 @@ Standalone Level Editor for Marble Race Simulation.
 
 Features:
 - Wall & Platform CRUD: Create, select, edit properties, delete
+- Emitter (Entry Pipe): Configure marble spawn point, angle, rate, count
 - Live Physics Preview: Test marbles with Space key
 - Grid Snapping: Configurable grid with toggle (G key)
 - Undo/Redo: Command pattern with Ctrl+Z/Y
@@ -11,6 +12,7 @@ Keyboard Shortcuts:
     V - Select tool
     W - Wall tool
     P - Platform tool
+    E - Emitter tool
     X - Delete tool
     Space - Toggle preview
     Ctrl+Z - Undo
@@ -27,7 +29,7 @@ import math
 import random
 from abc import ABC, abstractmethod
 from pathlib import Path
-from level_io import load_level, save_level, LEVELS_DIR, DEFAULT_LEVEL_PATH
+from level_io import load_level, save_level, get_default_emitter, LEVELS_DIR, DEFAULT_LEVEL_PATH
 
 # --- Configuration ---
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 1024, 768
@@ -43,6 +45,7 @@ TEXT_COLOR = (220, 220, 220)
 HIGHLIGHT_COLOR = (100, 180, 255)
 WALL_COLOR = (200, 200, 200)
 PLATFORM_COLOR = (140, 200, 120)
+EMITTER_COLOR = (100, 120, 180)
 SELECTED_COLOR = (255, 200, 100)
 PREVIEW_WALL_COLOR = (100, 150, 200)
 
@@ -147,6 +150,18 @@ class ModifyPlatformCommand(Command):
     def undo(self, editor):
         idx = editor.platforms.index(self.platform)
         editor.platforms[idx].update(self.old_props)
+
+
+class ModifyEmitterCommand(Command):
+    def __init__(self, old_emitter, new_emitter):
+        self.old_emitter = old_emitter.copy()
+        self.new_emitter = new_emitter.copy()
+
+    def execute(self, editor):
+        editor.emitter.update(self.new_emitter)
+
+    def undo(self, editor):
+        editor.emitter.update(self.old_emitter)
 
 
 class CommandHistory:
@@ -398,7 +413,6 @@ class Slider:
 class PreviewManager:
     """Manages live physics preview mode."""
 
-    MARBLE_COUNT = 20
     MARBLE_RADIUS = 6
     GRAVITY = 600.0
     ELASTICITY = 1.1
@@ -406,13 +420,18 @@ class PreviewManager:
     def __init__(self):
         self.space = None
         self.marbles = []
+        self.marble_queue = []
+        self.emitter = None
+        self.emit_accumulator = 0.0
         self.active = False
 
-    def start(self, walls, platforms):
+    def start(self, walls, platforms, emitter):
         """Start physics preview with current level geometry."""
         self.space = pymunk.Space()
         self.space.gravity = (0, self.GRAVITY)
         self.marbles = []
+        self.emitter = emitter
+        self.emit_accumulator = 0.0
 
         # Create walls
         static_body = self.space.static_body
@@ -437,46 +456,65 @@ class PreviewManager:
             shape.friction = 0.5
             self.space.add(body, shape)
 
-        # Spawn test marbles
-        start_x = CANVAS_SIZE // 2 - 50
-        start_y = 50
-        cols = 5
-        spacing = self.MARBLE_RADIUS * 2 + 4
-
-        for i in range(self.MARBLE_COUNT):
-            row = i // cols
-            col = i % cols
-            x = start_x + col * spacing + random.uniform(-3, 3)
-            y = start_y + row * spacing
-
-            mass = 1
-            moment = pymunk.moment_for_circle(mass, 0, self.MARBLE_RADIUS)
-            body = pymunk.Body(mass, moment)
-            body.position = (x, y)
-
-            shape = pymunk.Circle(body, self.MARBLE_RADIUS)
-            shape.elasticity = self.ELASTICITY
-            shape.friction = 0.3
-
-            self.space.add(body, shape)
-
-            hue = i / self.MARBLE_COUNT
+        # Prepare marble queue (use 20 for preview)
+        preview_count = min(20, emitter.get("count", 100))
+        self.marble_queue = []
+        for i in range(preview_count):
+            hue = i / preview_count
             r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 1.0)
             color = (int(r * 255), int(g * 255), int(b * 255))
-
-            self.marbles.append({
-                'body': body,
-                'shape': shape,
-                'color': color,
-                'active': True
-            })
+            self.marble_queue.append({'color': color})
 
         self.active = True
+
+    def emit_marble(self):
+        """Emit a single marble from the emitter."""
+        if not self.marble_queue or not self.emitter:
+            return False
+
+        marble_def = self.marble_queue.pop(0)
+
+        ex, ey = self.emitter["pos"]
+        width = self.emitter["width"]
+        angle_deg = self.emitter["angle"]
+        speed = self.emitter["speed"]
+
+        offset = random.uniform(-width / 2, width / 2)
+        angle_rad = math.radians(angle_deg)
+        perp_angle = angle_rad - math.pi / 2
+
+        x = ex + offset * math.cos(perp_angle)
+        y = ey + offset * math.sin(perp_angle)
+
+        vx = speed * math.cos(angle_rad)
+        vy = speed * math.sin(angle_rad)
+
+        mass = 1
+        moment = pymunk.moment_for_circle(mass, 0, self.MARBLE_RADIUS)
+        body = pymunk.Body(mass, moment)
+        body.position = (x, y)
+        body.velocity = (vx, vy)
+
+        shape = pymunk.Circle(body, self.MARBLE_RADIUS)
+        shape.elasticity = self.ELASTICITY
+        shape.friction = 0.3
+
+        self.space.add(body, shape)
+
+        self.marbles.append({
+            'body': body,
+            'shape': shape,
+            'color': marble_def['color'],
+            'active': True
+        })
+        return True
 
     def stop(self):
         """Stop physics preview."""
         self.space = None
         self.marbles = []
+        self.marble_queue = []
+        self.emitter = None
         self.active = False
 
     def update(self, dt):
@@ -485,6 +523,15 @@ class PreviewManager:
             return
 
         self.space.step(dt)
+
+        # Emit marbles from the emitter
+        if self.marble_queue and self.emitter:
+            rate = self.emitter.get("rate", 20.0)
+            self.emit_accumulator += dt
+            emit_interval = 1.0 / rate
+            while self.emit_accumulator >= emit_interval and self.marble_queue:
+                self.emit_marble()
+                self.emit_accumulator -= emit_interval
 
         # Remove marbles that exit the bottom
         for m in self.marbles:
@@ -496,6 +543,10 @@ class PreviewManager:
         """Draw the preview simulation."""
         if not self.active:
             return
+
+        # Draw emitter
+        if self.emitter:
+            self.draw_emitter(surface, self.emitter)
 
         # Draw walls and platforms
         for shape in self.space.shapes:
@@ -513,6 +564,35 @@ class PreviewManager:
                 pygame.draw.circle(surface, (0, 0, 0),
                                    (int(pos.x), int(pos.y)), self.MARBLE_RADIUS, 1)
 
+    def draw_emitter(self, surface, emitter):
+        """Draw the emitter pipe."""
+        ex, ey = emitter["pos"]
+        width = emitter["width"]
+        angle_deg = emitter["angle"]
+
+        angle_rad = math.radians(angle_deg)
+        perp_angle = angle_rad - math.pi / 2
+
+        half_width = width / 2
+        pipe_length = 30
+
+        left_x = ex + half_width * math.cos(perp_angle)
+        left_y = ey + half_width * math.sin(perp_angle)
+        right_x = ex - half_width * math.cos(perp_angle)
+        right_y = ey - half_width * math.sin(perp_angle)
+
+        back_dx = -pipe_length * math.cos(angle_rad)
+        back_dy = -pipe_length * math.sin(angle_rad)
+
+        points = [
+            (left_x, left_y),
+            (right_x, right_y),
+            (right_x + back_dx, right_y + back_dy),
+            (left_x + back_dx, left_y + back_dy),
+        ]
+        pygame.draw.polygon(surface, EMITTER_COLOR, points)
+        pygame.draw.polygon(surface, (150, 170, 220), points, 2)
+
 
 # --- Main Level Editor ---
 
@@ -523,6 +603,7 @@ class LevelEditor:
     MODE_SELECT = "select"
     MODE_WALL = "wall"
     MODE_PLATFORM = "platform"
+    MODE_EMITTER = "emitter"
     MODE_DELETE = "delete"
     MODE_PREVIEW = "preview"
 
@@ -539,6 +620,7 @@ class LevelEditor:
         # Level data
         self.walls = []
         self.platforms = []
+        self.emitter = get_default_emitter()
         self.level_name = "untitled"
         self.current_file = None
         self.modified = False
@@ -547,7 +629,9 @@ class LevelEditor:
         self.mode = self.MODE_SELECT
         self.selected_wall = None
         self.selected_platform = None
+        self.selected_emitter = False  # True when emitter is selected
         self.selected_handle = None  # For wall endpoint dragging
+        self.dragging_emitter = False  # For dragging the emitter
 
         # Drawing state
         self.drawing = False
@@ -600,16 +684,17 @@ class LevelEditor:
             self.MODE_SELECT: Button(10, btn_y, btn_w, btn_h, "Sel", toggle=True),
             self.MODE_WALL: Button(10, btn_y + btn_h + btn_gap, btn_w, btn_h, "Wall", toggle=True),
             self.MODE_PLATFORM: Button(10, btn_y + 2*(btn_h + btn_gap), btn_w, btn_h, "Plat", toggle=True),
-            self.MODE_DELETE: Button(10, btn_y + 3*(btn_h + btn_gap), btn_w, btn_h, "Del", toggle=True),
+            self.MODE_EMITTER: Button(10, btn_y + 3*(btn_h + btn_gap), btn_w, btn_h, "Emit", toggle=True),
+            self.MODE_DELETE: Button(10, btn_y + 4*(btn_h + btn_gap), btn_w, btn_h, "Del", toggle=True),
         }
         self.tool_buttons[self.MODE_SELECT].active = True
 
         # Preview button
-        self.preview_button = Button(10, btn_y + 4*(btn_h + btn_gap) + 20, btn_w, btn_h, "Test",
+        self.preview_button = Button(10, btn_y + 5*(btn_h + btn_gap) + 20, btn_w, btn_h, "Test",
                                      color=(60, 100, 80), hover_color=(80, 130, 100))
 
         # Grid toggle button
-        self.grid_button = Button(10, btn_y + 5*(btn_h + btn_gap) + 30, btn_w, 30, "Grid", toggle=True)
+        self.grid_button = Button(10, btn_y + 6*(btn_h + btn_gap) + 30, btn_w, 30, "Grid", toggle=True)
         self.grid_button.active = True
 
         # Property panel input fields (will be positioned in draw)
@@ -701,12 +786,20 @@ class LevelEditor:
                 best_idx = idx
         return best_idx if best_dist <= threshold else None
 
+    def is_near_emitter(self, pos, threshold=30):
+        """Check if a point is near the emitter."""
+        ex, ey = self.emitter["pos"]
+        dist = self.distance_to_point(pos, (ex, ey))
+        return dist <= threshold
+
     def set_mode(self, mode):
         """Switch to a new editor mode."""
         self.mode = mode
         self.selected_wall = None
         self.selected_platform = None
+        self.selected_emitter = False
         self.selected_handle = None
+        self.dragging_emitter = False
         self.drawing = False
         self.draw_start = None
         self.draw_end = None
@@ -721,12 +814,14 @@ class LevelEditor:
             level = load_level(path)
             self.walls = list(level.get("walls", []))
             self.platforms = list(level.get("platforms", []))
+            self.emitter = level.get("emitter", get_default_emitter())
             self.level_name = level.get("name", "level")
             self.current_file = Path(path)
             self.modified = False
             self.history.clear()
             self.selected_wall = None
             self.selected_platform = None
+            self.selected_emitter = False
         except Exception as e:
             print(f"Error loading level: {e}")
 
@@ -738,7 +833,7 @@ class LevelEditor:
             path = LEVELS_DIR / "untitled.json"
 
         try:
-            save_level(path, self.walls, self.platforms, name=self.level_name)
+            save_level(path, self.walls, self.platforms, self.emitter, name=self.level_name)
             self.current_file = Path(path)
             self.modified = False
             self.refresh_level_list()
@@ -749,6 +844,7 @@ class LevelEditor:
         """Create a new empty level."""
         self.walls = []
         self.platforms = []
+        self.emitter = get_default_emitter()
         self.level_name = "untitled"
         self.current_file = None
         self.modified = False
@@ -793,13 +889,15 @@ class LevelEditor:
                 self.set_mode(self.MODE_WALL)
             elif event.key == pygame.K_p:
                 self.set_mode(self.MODE_PLATFORM)
+            elif event.key == pygame.K_e:
+                self.set_mode(self.MODE_EMITTER)
             elif event.key == pygame.K_x:
                 self.set_mode(self.MODE_DELETE)
             elif event.key == pygame.K_g:
                 self.grid.enabled = not self.grid.enabled
                 self.grid_button.active = self.grid.enabled
             elif event.key == pygame.K_SPACE:
-                self.preview.start(self.walls, self.platforms)
+                self.preview.start(self.walls, self.platforms, self.emitter)
                 self.mode = self.MODE_PREVIEW
             elif event.key == pygame.K_DELETE:
                 self.delete_selected()
@@ -811,7 +909,7 @@ class LevelEditor:
                 return True
 
         if self.preview_button.is_clicked(event):
-            self.preview.start(self.walls, self.platforms)
+            self.preview.start(self.walls, self.platforms, self.emitter)
             self.mode = self.MODE_PREVIEW
             return True
 
@@ -855,11 +953,14 @@ class LevelEditor:
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             if self.drawing:
                 self.finish_drawing()
+            self.dragging_emitter = False
         elif event.type == pygame.MOUSEMOTION:
             if self.drawing and canvas_pos:
                 self.draw_end = self.grid.snap_point(canvas_pos)
             elif self.selected_handle and canvas_pos and pygame.mouse.get_pressed()[0]:
                 self.drag_wall_handle(canvas_pos)
+            elif self.dragging_emitter and canvas_pos and pygame.mouse.get_pressed()[0]:
+                self.drag_emitter(canvas_pos)
 
         return True
 
@@ -874,6 +975,7 @@ class LevelEditor:
                 self.selected_wall = handle[0]
                 self.selected_handle = handle
                 self.selected_platform = None
+                self.selected_emitter = False
                 self.update_property_fields()
                 return
 
@@ -882,6 +984,7 @@ class LevelEditor:
             if wall_idx is not None:
                 self.selected_wall = wall_idx
                 self.selected_platform = None
+                self.selected_emitter = False
                 self.selected_handle = None
                 self.update_property_fields()
                 return
@@ -891,13 +994,25 @@ class LevelEditor:
             if plat_idx is not None:
                 self.selected_platform = plat_idx
                 self.selected_wall = None
+                self.selected_emitter = False
                 self.selected_handle = None
+                self.update_property_fields()
+                return
+
+            # Then check for emitter
+            if self.is_near_emitter(pos):
+                self.selected_emitter = True
+                self.selected_wall = None
+                self.selected_platform = None
+                self.selected_handle = None
+                self.dragging_emitter = True
                 self.update_property_fields()
                 return
 
             # Clicked on empty space
             self.selected_wall = None
             self.selected_platform = None
+            self.selected_emitter = False
             self.selected_handle = None
             self.update_property_fields()
 
@@ -918,6 +1033,20 @@ class LevelEditor:
             self.modified = True
             self.selected_platform = len(self.platforms) - 1
             self.selected_wall = None
+            self.selected_emitter = False
+            self.update_property_fields()
+
+        elif self.mode == self.MODE_EMITTER:
+            # Move the emitter to clicked position
+            old_emitter = self.emitter.copy()
+            new_emitter = self.emitter.copy()
+            new_emitter["pos"] = (float(snapped_pos[0]), float(snapped_pos[1]))
+            cmd = ModifyEmitterCommand(old_emitter, new_emitter)
+            self.history.execute(cmd, self)
+            self.modified = True
+            self.selected_emitter = True
+            self.selected_wall = None
+            self.selected_platform = None
             self.update_property_fields()
 
         elif self.mode == self.MODE_DELETE:
@@ -957,6 +1086,13 @@ class LevelEditor:
 
         self.walls[idx] = new_wall
         self.modified = True
+
+    def drag_emitter(self, pos):
+        """Drag the emitter to a new position."""
+        snapped = self.grid.snap_point(pos)
+        self.emitter["pos"] = (float(snapped[0]), float(snapped[1]))
+        self.modified = True
+        self.update_property_fields()
 
     def finish_drawing(self):
         """Finish drawing a wall."""
@@ -1035,6 +1171,28 @@ class LevelEditor:
             self.prop_fields['ang_vel'] = InputField(prop_x, prop_y + 3*field_gap, field_w, field_h, "Angular Vel")
             self.prop_fields['ang_vel'].set_value(plat['angular_velocity'])
 
+        elif self.selected_emitter:
+            self.prop_fields['emit_x'] = InputField(prop_x, prop_y, field_w, field_h, "X Position")
+            self.prop_fields['emit_x'].set_value(self.emitter['pos'][0])
+
+            self.prop_fields['emit_y'] = InputField(prop_x, prop_y + field_gap, field_w, field_h, "Y Position")
+            self.prop_fields['emit_y'].set_value(self.emitter['pos'][1])
+
+            self.prop_fields['emit_angle'] = InputField(prop_x, prop_y + 2*field_gap, field_w, field_h, "Angle (deg)")
+            self.prop_fields['emit_angle'].set_value(self.emitter['angle'])
+
+            self.prop_fields['emit_width'] = InputField(prop_x, prop_y + 3*field_gap, field_w, field_h, "Width")
+            self.prop_fields['emit_width'].set_value(self.emitter['width'])
+
+            self.prop_fields['emit_rate'] = InputField(prop_x, prop_y + 4*field_gap, field_w, field_h, "Rate (/sec)")
+            self.prop_fields['emit_rate'].set_value(self.emitter['rate'])
+
+            self.prop_fields['emit_count'] = InputField(prop_x, prop_y + 5*field_gap, field_w, field_h, "Count")
+            self.prop_fields['emit_count'].set_value(self.emitter['count'])
+
+            self.prop_fields['emit_speed'] = InputField(prop_x, prop_y + 6*field_gap, field_w, field_h, "Speed")
+            self.prop_fields['emit_speed'].set_value(self.emitter['speed'])
+
     def apply_property_changes(self):
         """Apply changes from property fields to the selected element."""
         if self.selected_wall is not None and self.selected_wall < len(self.walls):
@@ -1056,6 +1214,63 @@ class LevelEditor:
                 self.platforms[self.selected_platform]['angular_velocity'] = self.prop_fields['ang_vel'].get_float()
                 self.modified = True
 
+        elif self.selected_emitter:
+            emitter_keys = ['emit_x', 'emit_y', 'emit_angle', 'emit_width', 'emit_rate', 'emit_count', 'emit_speed']
+            if all(k in self.prop_fields for k in emitter_keys):
+                self.emitter['pos'] = (
+                    self.prop_fields['emit_x'].get_float(),
+                    self.prop_fields['emit_y'].get_float()
+                )
+                self.emitter['angle'] = self.prop_fields['emit_angle'].get_float()
+                self.emitter['width'] = self.prop_fields['emit_width'].get_float()
+                self.emitter['rate'] = self.prop_fields['emit_rate'].get_float()
+                self.emitter['count'] = int(self.prop_fields['emit_count'].get_float())
+                self.emitter['speed'] = self.prop_fields['emit_speed'].get_float()
+                self.modified = True
+
+    def draw_emitter(self, surface):
+        """Draw the emitter/entry pipe."""
+        emitter = self.emitter
+        ex, ey = emitter["pos"]
+        width = emitter["width"]
+        angle_deg = emitter["angle"]
+
+        angle_rad = math.radians(angle_deg)
+        perp_angle = angle_rad - math.pi / 2
+
+        half_width = width / 2
+        pipe_length = 30
+
+        left_x = ex + half_width * math.cos(perp_angle)
+        left_y = ey + half_width * math.sin(perp_angle)
+        right_x = ex - half_width * math.cos(perp_angle)
+        right_y = ey - half_width * math.sin(perp_angle)
+
+        back_dx = -pipe_length * math.cos(angle_rad)
+        back_dy = -pipe_length * math.sin(angle_rad)
+
+        points = [
+            (left_x, left_y),
+            (right_x, right_y),
+            (right_x + back_dx, right_y + back_dy),
+            (left_x + back_dx, left_y + back_dy),
+        ]
+
+        # Use selected color if emitter is selected
+        color = SELECTED_COLOR if self.selected_emitter else EMITTER_COLOR
+        pygame.draw.polygon(surface, color, points)
+        pygame.draw.polygon(surface, (150, 170, 220), points, 2)
+
+        # Draw emission direction indicator
+        arrow_len = 15
+        arrow_x = ex + arrow_len * math.cos(angle_rad)
+        arrow_y = ey + arrow_len * math.sin(angle_rad)
+        pygame.draw.line(surface, (200, 220, 255), (ex, ey), (arrow_x, arrow_y), 2)
+
+        # Draw center handle if selected
+        if self.selected_emitter:
+            pygame.draw.circle(surface, HIGHLIGHT_COLOR, (int(ex), int(ey)), 6)
+
     def draw(self):
         """Draw the entire editor interface."""
         self.screen.fill(BG_COLOR)
@@ -1069,7 +1284,7 @@ class LevelEditor:
         self.screen.blit(title_surf, (10, 7))
 
         # Draw shortcuts hint
-        shortcuts = "V:Select  W:Wall  P:Platform  X:Delete  Space:Test  G:Grid  Ctrl+Z/Y:Undo/Redo"
+        shortcuts = "V:Select  W:Wall  P:Platform  E:Emitter  X:Delete  Space:Test  G:Grid  Ctrl+Z/Y:Undo/Redo"
         shortcuts_surf = self.small_font.render(shortcuts, True, (150, 150, 150))
         self.screen.blit(shortcuts_surf, (200, 9))
 
@@ -1119,6 +1334,9 @@ class LevelEditor:
                 # Draw center point
                 pygame.draw.circle(canvas_surface, (255, 255, 255), (int(cx), int(cy)), 3)
 
+            # Draw emitter
+            self.draw_emitter(canvas_surface)
+
             # Draw preview line when creating wall
             if self.drawing and self.draw_start and self.draw_end:
                 pygame.draw.line(canvas_surface, PREVIEW_WALL_COLOR,
@@ -1143,6 +1361,8 @@ class LevelEditor:
             panel_title = "Wall Properties"
         elif self.selected_platform is not None:
             panel_title = "Platform Properties"
+        elif self.selected_emitter:
+            panel_title = "Emitter Properties"
         title_surf = self.font.render(panel_title, True, TEXT_COLOR)
         self.screen.blit(title_surf, (prop_panel_x + 15, MENU_BAR_HEIGHT + 15))
 
@@ -1151,6 +1371,8 @@ class LevelEditor:
             info = f"Wall #{self.selected_wall + 1}"
         elif self.selected_platform is not None:
             info = f"Platform #{self.selected_platform + 1}"
+        elif self.selected_emitter:
+            info = "Entry Pipe"
         else:
             info = "Nothing selected"
         info_surf = self.small_font.render(info, True, (150, 150, 150))
