@@ -14,8 +14,8 @@ MARBLE_RADIUS = 6
 FUNNEL_WALL_THICKNESS = 5
 
 # Physics Constants
-GRAVITY = 600.0
-ELASTICITY = 1.1  # Bounciness (values > 1 are super bouncy)
+GRAVITY = 350.0
+ELASTICITY = 0.9
 FRICTION = 0.3
 
 # Colors
@@ -204,9 +204,9 @@ class MarbleSimulation:
         slider_x = 20
         slider_width = 150
         self.timer_slider = Slider(slider_x, HEIGHT - 180, slider_width,
-                                   "Timer (sec)", 10, 120, 60, "{:.0f}")
+                                   "Timer (sec)", 1, 60, 30, "{:.0f}")
         self.gravity_slider = Slider(slider_x, HEIGHT - 140, slider_width,
-                                     "Gravity", 200, 1200, GRAVITY, "{:.0f}")
+                                     "Gravity", 0, 1000, GRAVITY, "{:.0f}")
         self.bounce_slider = Slider(slider_x, HEIGHT - 100, slider_width,
                                     "Bounciness", 0.5, 2.0, ELASTICITY, "{:.2f}")
         self.speed_slider = Slider(slider_x + slider_width + 40, HEIGHT - 180, slider_width,
