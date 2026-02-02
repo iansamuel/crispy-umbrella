@@ -203,17 +203,23 @@ class MarbleSimulation:
         # Settings sliders (positioned at bottom left)
         slider_x = 20
         slider_width = 150
+        col2_x = slider_x + slider_width + 40
         self.timer_slider = Slider(slider_x, HEIGHT - 180, slider_width,
                                    "Timer (sec)", 1, 60, 30, "{:.0f}")
         self.gravity_slider = Slider(slider_x, HEIGHT - 140, slider_width,
                                      "Gravity", 0, 1000, GRAVITY, "{:.0f}")
         self.bounce_slider = Slider(slider_x, HEIGHT - 100, slider_width,
                                     "Bounciness", 0.5, 2.0, ELASTICITY, "{:.2f}")
-        self.speed_slider = Slider(slider_x + slider_width + 40, HEIGHT - 180, slider_width,
+        self.speed_slider = Slider(col2_x, HEIGHT - 180, slider_width,
                                    "Speed", 0.25, 1.5, 0.75, "{:.2f}")
+        self.emit_rate_slider = Slider(col2_x, HEIGHT - 140, slider_width,
+                                       "Emit Rate", 1, 50, 20, "{:.0f}")
+        self.marble_count_slider = Slider(col2_x, HEIGHT - 100, slider_width,
+                                          "Marble Count", 10, 200, 100, "{:.0f}")
 
         self.sliders = [self.timer_slider, self.gravity_slider,
-                        self.bounce_slider, self.speed_slider]
+                        self.bounce_slider, self.speed_slider,
+                        self.emit_rate_slider, self.marble_count_slider]
 
         self.update_viewport()
         self.layout_ui()
@@ -253,6 +259,8 @@ class MarbleSimulation:
         self.marbles_emitted = 0
         self.emit_accumulator = 0.0  # Accumulates time for emission timing
         self.marble_queue = []  # Pre-generated marble definitions to emit
+        self.emit_rate = self.emit_rate_slider.value
+        self.marble_count = int(self.marble_count_slider.value)
 
         if not self.level_walls:
             self.load_level(self.default_level_path)
@@ -339,7 +347,11 @@ class MarbleSimulation:
 
     def prepare_marble_queue(self):
         """Prepares marble definitions to be emitted during simulation."""
-        count = self.level_emitter.get("count", MARBLE_COUNT)
+        count = int(self.marble_count_slider.value)
+        self.prepare_marble_queue_with_count(count)
+
+    def prepare_marble_queue_with_count(self, count):
+        """Prepares marble definitions with a specific count."""
         shape_types = [0, 3, 4, 5, 6]
 
         self.marble_queue = []
@@ -435,6 +447,12 @@ class MarbleSimulation:
                     self.toggle_editor()
                     continue
 
+                # ESC to stop and reset during running state
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    if self.state == "running":
+                        self.reset_simulation()
+                        continue
+
                 # Handle slider events in ready state
                 if self.state == "ready":
                     for slider in self.sliders:
@@ -506,6 +524,10 @@ class MarbleSimulation:
         self.space.gravity = (0, self.gravity_slider.value)
         self.sim_speed = self.speed_slider.value
         self.time_limit = self.timer_slider.value
+        self.emit_rate = self.emit_rate_slider.value
+        self.marble_count = int(self.marble_count_slider.value)
+        # Regenerate marble queue with slider count
+        self.prepare_marble_queue_with_count(self.marble_count)
         # Apply bounciness to all marbles
         for m in self.marbles:
             m['shape'].elasticity = self.bounce_slider.value
@@ -654,9 +676,8 @@ class MarbleSimulation:
 
         # Emit marbles from the emitter
         if self.marble_queue:
-            rate = self.level_emitter.get("rate", 20.0)
             self.emit_accumulator += dt
-            emit_interval = 1.0 / rate
+            emit_interval = 1.0 / self.emit_rate
             while self.emit_accumulator >= emit_interval and self.marble_queue:
                 self.emit_marble()
                 self.emit_accumulator -= emit_interval
@@ -678,11 +699,8 @@ class MarbleSimulation:
         elapsed = (pygame.time.get_ticks() - self.start_time) / 1000.0
         self.time_remaining = max(0, self.time_limit - elapsed)
 
-        # Total marble count from emitter
-        total_count = self.level_emitter.get("count", MARBLE_COUNT)
-
         # Check if all marbles are done or time is up
-        if len(self.finished_rank) == total_count:
+        if len(self.finished_rank) == self.marble_count:
             self.state = "finished"
             self.reset_button.visible = True
         elif self.time_remaining <= 0:
@@ -771,7 +789,7 @@ class MarbleSimulation:
                     pygame.draw.polygon(surface, (0, 0, 0), points, 1)
 
     def draw_status(self, surface):
-        total_count = self.level_emitter.get("count", MARBLE_COUNT)
+        total_count = getattr(self, 'marble_count', int(self.marble_count_slider.value))
         status_text = f"Emitted: {self.marbles_emitted}/{total_count}  Finished: {len(self.finished_rank)}/{total_count}"
         surf = self.font.render(status_text, True, TEXT_COLOR)
         surface.blit(surf, (10, 10))
