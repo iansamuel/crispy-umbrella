@@ -313,6 +313,7 @@ class MarbleSimulation:
         self.space = pymunk.Space()
         self.space.gravity = (0, 0)  # Start with no gravity until simulation begins
         self.wall_shapes = []
+        self.conveyor_shapes = []
 
         self.marbles = []       # List of marble data
         self.finished_rank = []  # List of marble data in order of finish
