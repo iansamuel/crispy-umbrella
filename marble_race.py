@@ -847,43 +847,25 @@ class MarbleSimulation:
             return
 
         # Calculate optimal grid layout based on count and screen size
-        available_width = self.screen_width - 60  # margins
+        available_width = self.screen_width - 40  # smaller margins to use more space
         available_height = self.screen_height - 120  # title + button area
 
-        # Determine columns and rows needed
-        # Try different column counts and pick the one that fits best
-        best_cols = 5
-        best_font_size = 12
-        best_padding_x = 155
-        best_padding_y = 35
+        # Calculate optimal columns to fill horizontal space
+        # Aim for entries around 120-140px wide
+        target_entry_width = 130
+        best_cols = max(4, available_width // target_entry_width)
+        best_cols = min(best_cols, 12)  # cap at 12 columns
 
-        for cols in range(3, 10):
-            rows = (total + cols - 1) // cols
-            padding_x = available_width // cols
-            padding_y = available_height // max(rows, 1)
-
-            # Clamp padding to reasonable values
-            padding_x = min(padding_x, 180)
-            padding_y = min(padding_y, 40)
-
-            # Calculate font size based on available space
-            font_size = min(12, padding_y // 3, padding_x // 14)
-            font_size = max(6, font_size)  # minimum readable size
-
-            # Check if this layout fits
-            needed_height = rows * padding_y
-            if needed_height <= available_height and padding_y >= 18:
-                best_cols = cols
-                best_font_size = font_size
-                best_padding_x = padding_x
-                best_padding_y = padding_y
-                break
-
-        # If still too many rows, compress further
+        # Calculate rows needed
         rows = (total + best_cols - 1) // best_cols
-        if rows * best_padding_y > available_height:
-            best_padding_y = max(15, available_height // rows)
-            best_font_size = max(6, min(best_font_size, best_padding_y // 3))
+
+        # Calculate actual spacing
+        best_padding_x = available_width // best_cols
+        best_padding_y = min(32, available_height // max(rows, 1))
+        best_padding_y = max(20, best_padding_y)  # minimum row height
+
+        # Font size: minimum 9, scale with row height
+        best_font_size = max(9, min(12, best_padding_y // 2 - 2))
 
         start_x = 30
         start_y = 60
