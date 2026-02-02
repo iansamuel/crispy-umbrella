@@ -289,8 +289,10 @@ class MarbleSimulation:
         self.level_name = "level"
         self.level_walls = []
         self.level_platforms = []
+        self.level_conveyors = []
         self.level_emitter = get_default_emitter()
         self.wall_shapes = []
+        self.conveyor_shapes = []
         self.platform_templates = [
             {"length": 50, "angular_velocity": 2.0},
             {"length": 50, "angular_velocity": -2.0},
@@ -345,6 +347,7 @@ class MarbleSimulation:
             self.rebuild_walls()
         
         self.create_rotating_platforms()
+        self.create_conveyors()
         self.prepare_marble_queue()
 
     def load_level_by_index(self, index):
@@ -412,6 +415,7 @@ class MarbleSimulation:
         self.level_name = level.get("name", "level")
         self.level_walls = list(level.get("walls", []))
         self.level_platforms = list(level.get("platforms", []))
+        self.level_conveyors = list(level.get("conveyors", []))
         self.level_emitter = level.get("emitter", get_default_emitter())
         self.rebuild_walls()
 
@@ -435,6 +439,39 @@ class MarbleSimulation:
 
             self.space.add(body, shape)
             self.rotating_bodies.append((body, shape))
+
+    def create_conveyors(self):
+        """Creates conveyor belt segments that move marbles along them."""
+        # Remove old conveyor shapes if any
+        if self.conveyor_shapes:
+            for shape in self.conveyor_shapes:
+                self.space.remove(shape)
+        self.conveyor_shapes = []
+
+        static_body = self.space.static_body
+
+        for conv in self.level_conveyors:
+            start = conv["start"]
+            end = conv["end"]
+            speed = conv["speed"]
+
+            # Create the conveyor segment
+            shape = pymunk.Segment(static_body, start, end, 6)
+            shape.elasticity = 0.3
+            shape.friction = 1.0  # High friction for conveyor grip
+
+            # Calculate direction vector for surface velocity
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length > 0:
+                # Normalize and scale by speed
+                dir_x = (dx / length) * speed
+                dir_y = (dy / length) * speed
+                shape.surface_velocity = (dir_x, dir_y)
+
+            self.space.add(shape)
+            self.conveyor_shapes.append(shape)
 
     def rebuild_walls(self):
         """Rebuilds static wall segments from current level data."""
@@ -779,7 +816,7 @@ class MarbleSimulation:
             elif event.key == pygame.K_r:
                 self.load_level(self.default_level_path)
             elif event.key == pygame.K_s:
-                save_level(self.edited_level_path, self.level_walls, self.level_platforms, self.level_emitter, name="edited")
+                save_level(self.edited_level_path, self.level_walls, self.level_platforms, self.level_emitter, self.level_conveyors, name="edited")
             elif event.key == pygame.K_l:
                 if self.edited_level_path.exists():
                     self.load_level(self.edited_level_path)
@@ -973,6 +1010,50 @@ class MarbleSimulation:
         arrow_y = ey + arrow_len * math.sin(angle_rad)
         pygame.draw.line(surface, (200, 220, 255), (ex, ey), (arrow_x, arrow_y), 2)
 
+    def draw_conveyors(self, surface):
+        """Draw conveyor belts with direction indicators."""
+        for conv in self.level_conveyors:
+            start = conv["start"]
+            end = conv["end"]
+            speed = conv["speed"]
+
+            # Draw the conveyor belt (thicker, different color)
+            color = (80, 180, 80) if speed >= 0 else (180, 80, 80)
+            pygame.draw.line(surface, color, start, end, 12)
+            pygame.draw.line(surface, (60, 60, 60), start, end, 8)
+
+            # Draw direction arrows along the belt
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length > 0:
+                # Normalize direction
+                dir_x = dx / length
+                dir_y = dy / length
+                # Flip direction if speed is negative
+                if speed < 0:
+                    dir_x, dir_y = -dir_x, -dir_y
+
+                # Draw arrows at intervals
+                num_arrows = max(1, int(length / 30))
+                for i in range(num_arrows):
+                    t = (i + 0.5) / num_arrows
+                    ax = start[0] + dx * t
+                    ay = start[1] + dy * t
+
+                    # Arrow head points
+                    arrow_size = 6
+                    perp_x, perp_y = -dir_y, dir_x  # perpendicular
+                    tip_x = ax + dir_x * arrow_size
+                    tip_y = ay + dir_y * arrow_size
+                    left_x = ax - perp_x * arrow_size * 0.5
+                    left_y = ay - perp_y * arrow_size * 0.5
+                    right_x = ax + perp_x * arrow_size * 0.5
+                    right_y = ay + perp_y * arrow_size * 0.5
+
+                    pygame.draw.polygon(surface, (200, 255, 200),
+                                       [(tip_x, tip_y), (left_x, left_y), (right_x, right_y)])
+
     def draw_simulation(self, surface):
         # Draw Funnel Lines (Pymunk debug draw handles this, but let's make it cleaner)
         # We manually draw marbles to control their colors
@@ -980,9 +1061,12 @@ class MarbleSimulation:
         # 0. Draw Emitter
         self.draw_emitter(surface)
 
-        # 1. Draw Funnel (Static shapes)
+        # 0.5. Draw Conveyors
+        self.draw_conveyors(surface)
+
+        # 1. Draw Funnel (Static shapes) - skip conveyor shapes
         for shape in self.space.shapes:
-            if isinstance(shape, pymunk.Segment):
+            if isinstance(shape, pymunk.Segment) and shape not in self.conveyor_shapes:
                 p1 = shape.a
                 p2 = shape.b
                 # Transform local to world if needed (static body usually identity)
@@ -1103,6 +1187,9 @@ class MarbleSimulation:
     def draw_editor(self, surface):
         # Draw emitter
         self.draw_emitter(surface)
+
+        # Draw conveyors
+        self.draw_conveyors(surface)
 
         # Draw existing walls
         for start, end in self.level_walls:

@@ -55,13 +55,26 @@ def load_level(path):
     else:
         emitter = get_default_emitter()
 
-    return {"name": data.get("name", "level"), "walls": walls, "platforms": platforms, "emitter": emitter}
+    # Load conveyors
+    conveyors = []
+    for conv in data.get("conveyors", []):
+        start = conv.get("start", [0, 0])
+        end = conv.get("end", [0, 0])
+        conveyors.append({
+            "start": (float(start[0]), float(start[1])),
+            "end": (float(end[0]), float(end[1])),
+            "speed": float(conv.get("speed", 100.0)),
+        })
+
+    return {"name": data.get("name", "level"), "walls": walls, "platforms": platforms, "emitter": emitter, "conveyors": conveyors}
 
 
-def save_level(path, walls, platforms, emitter=None, name="level"):
+def save_level(path, walls, platforms, emitter=None, conveyors=None, name="level"):
     LEVELS_DIR.mkdir(parents=True, exist_ok=True)
     if emitter is None:
         emitter = get_default_emitter()
+    if conveyors is None:
+        conveyors = []
     payload = {
         "name": name,
         "walls": [
@@ -78,6 +91,14 @@ def save_level(path, walls, platforms, emitter=None, name="level"):
                 "angular_velocity": float(p["angular_velocity"]),
             }
             for p in platforms
+        ],
+        "conveyors": [
+            {
+                "start": [int(round(c["start"][0])), int(round(c["start"][1]))],
+                "end": [int(round(c["end"][0])), int(round(c["end"][1]))],
+                "speed": float(c["speed"]),
+            }
+            for c in conveyors
         ],
         "emitter": {
             "pos": [int(round(emitter["pos"][0])), int(round(emitter["pos"][1]))],

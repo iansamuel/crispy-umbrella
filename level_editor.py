@@ -3,6 +3,7 @@ Standalone Level Editor for Marble Race Simulation.
 
 Features:
 - Wall & Platform CRUD: Create, select, edit properties, delete
+- Conveyor Belts: Create conveyor segments that move marbles along them
 - Emitter (Entry Pipe): Configure marble spawn point, angle, rate, count
 - Live Physics Preview: Test marbles with Space key
 - Grid Snapping: Configurable grid with toggle (G key)
@@ -12,6 +13,7 @@ Keyboard Shortcuts:
     V - Select tool
     W - Wall tool
     P - Platform tool
+    C - Conveyor tool
     E - Emitter tool
     X - Delete tool
     Space - Toggle preview
@@ -45,6 +47,7 @@ TEXT_COLOR = (220, 220, 220)
 HIGHLIGHT_COLOR = (100, 180, 255)
 WALL_COLOR = (200, 200, 200)
 PLATFORM_COLOR = (140, 200, 120)
+CONVEYOR_COLOR = (80, 180, 80)
 EMITTER_COLOR = (100, 120, 180)
 SELECTED_COLOR = (255, 200, 100)
 PREVIEW_WALL_COLOR = (100, 150, 200)
@@ -162,6 +165,44 @@ class ModifyEmitterCommand(Command):
 
     def undo(self, editor):
         editor.emitter.update(self.old_emitter)
+
+
+class AddConveyorCommand(Command):
+    def __init__(self, conveyor):
+        self.conveyor = conveyor
+
+    def execute(self, editor):
+        editor.conveyors.append(self.conveyor)
+
+    def undo(self, editor):
+        editor.conveyors.remove(self.conveyor)
+
+
+class DeleteConveyorCommand(Command):
+    def __init__(self, conveyor, index):
+        self.conveyor = conveyor
+        self.index = index
+
+    def execute(self, editor):
+        editor.conveyors.remove(self.conveyor)
+
+    def undo(self, editor):
+        editor.conveyors.insert(self.index, self.conveyor)
+
+
+class ModifyConveyorCommand(Command):
+    def __init__(self, conveyor, old_props, new_props):
+        self.conveyor = conveyor
+        self.old_props = old_props.copy()
+        self.new_props = new_props.copy()
+
+    def execute(self, editor):
+        idx = editor.conveyors.index(self.conveyor)
+        editor.conveyors[idx].update(self.new_props)
+
+    def undo(self, editor):
+        idx = editor.conveyors.index(self.conveyor)
+        editor.conveyors[idx].update(self.old_props)
 
 
 class CommandHistory:
@@ -422,16 +463,18 @@ class PreviewManager:
         self.marbles = []
         self.marble_queue = []
         self.emitter = None
+        self.conveyors = []
         self.emit_accumulator = 0.0
         self.active = False
 
-    def start(self, walls, platforms, emitter):
+    def start(self, walls, platforms, emitter, conveyors=None):
         """Start physics preview with current level geometry."""
         self.space = pymunk.Space()
         self.space.gravity = (0, self.GRAVITY)
         self.marbles = []
         self.emitter = emitter
         self.emit_accumulator = 0.0
+        self.conveyors = conveyors or []
 
         # Create walls
         static_body = self.space.static_body
@@ -455,6 +498,24 @@ class PreviewManager:
             shape.elasticity = 0.8
             shape.friction = 0.5
             self.space.add(body, shape)
+
+        # Create conveyors
+        for conv in self.conveyors:
+            start = conv["start"]
+            end = conv["end"]
+            speed = conv["speed"]
+            shape = pymunk.Segment(static_body, start, end, 6)
+            shape.elasticity = 0.3
+            shape.friction = 1.0
+            # Calculate direction vector for surface velocity
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length > 0:
+                dir_x = (dx / length) * speed
+                dir_y = (dy / length) * speed
+                shape.surface_velocity = (dir_x, dir_y)
+            self.space.add(shape)
 
         # Prepare marble queue (use 20 for preview)
         preview_count = min(20, emitter.get("count", 100))
@@ -515,6 +576,7 @@ class PreviewManager:
         self.marbles = []
         self.marble_queue = []
         self.emitter = None
+        self.conveyors = []
         self.active = False
 
     def update(self, dt):
@@ -547,6 +609,41 @@ class PreviewManager:
         # Draw emitter
         if self.emitter:
             self.draw_emitter(surface, self.emitter)
+
+        # Draw conveyors with direction arrows
+        for conv in self.conveyors:
+            start = conv["start"]
+            end = conv["end"]
+            speed = conv["speed"]
+            pygame.draw.line(surface, CONVEYOR_COLOR, start, end, 12)
+
+            # Draw direction arrows
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length > 0:
+                dir_x = dx / length
+                dir_y = dy / length
+                if speed < 0:
+                    dir_x = -dir_x
+                    dir_y = -dir_y
+
+                num_arrows = max(1, int(length / 30))
+                for i in range(num_arrows):
+                    t = (i + 0.5) / num_arrows
+                    ax = start[0] + t * dx
+                    ay = start[1] + t * dy
+                    arrow_size = 6
+                    perp_x = -dir_y
+                    perp_y = dir_x
+                    tip_x = ax + dir_x * arrow_size
+                    tip_y = ay + dir_y * arrow_size
+                    left_x = ax - dir_x * 2 + perp_x * arrow_size * 0.5
+                    left_y = ay - dir_y * 2 + perp_y * arrow_size * 0.5
+                    right_x = ax - dir_x * 2 - perp_x * arrow_size * 0.5
+                    right_y = ay - dir_y * 2 - perp_y * arrow_size * 0.5
+                    pygame.draw.polygon(surface, (255, 255, 255),
+                                       [(tip_x, tip_y), (left_x, left_y), (right_x, right_y)])
 
         # Draw walls and platforms
         for shape in self.space.shapes:
@@ -603,6 +700,7 @@ class LevelEditor:
     MODE_SELECT = "select"
     MODE_WALL = "wall"
     MODE_PLATFORM = "platform"
+    MODE_CONVEYOR = "conveyor"
     MODE_EMITTER = "emitter"
     MODE_DELETE = "delete"
     MODE_PREVIEW = "preview"
@@ -620,6 +718,7 @@ class LevelEditor:
         # Level data
         self.walls = []
         self.platforms = []
+        self.conveyors = []
         self.emitter = get_default_emitter()
         self.level_name = "untitled"
         self.current_file = None
@@ -629,6 +728,7 @@ class LevelEditor:
         self.mode = self.MODE_SELECT
         self.selected_wall = None
         self.selected_platform = None
+        self.selected_conveyor = None
         self.selected_emitter = False  # True when emitter is selected
         self.selected_handle = None  # For wall endpoint dragging
         self.dragging_emitter = False  # For dragging the emitter
@@ -685,17 +785,18 @@ class LevelEditor:
             self.MODE_SELECT: Button(10, btn_y, btn_w, btn_h, "Sel", toggle=True),
             self.MODE_WALL: Button(10, btn_y + btn_h + btn_gap, btn_w, btn_h, "Wall", toggle=True),
             self.MODE_PLATFORM: Button(10, btn_y + 2*(btn_h + btn_gap), btn_w, btn_h, "Plat", toggle=True),
-            self.MODE_EMITTER: Button(10, btn_y + 3*(btn_h + btn_gap), btn_w, btn_h, "Emit", toggle=True),
-            self.MODE_DELETE: Button(10, btn_y + 4*(btn_h + btn_gap), btn_w, btn_h, "Del", toggle=True),
+            self.MODE_CONVEYOR: Button(10, btn_y + 3*(btn_h + btn_gap), btn_w, btn_h, "Conv", toggle=True),
+            self.MODE_EMITTER: Button(10, btn_y + 4*(btn_h + btn_gap), btn_w, btn_h, "Emit", toggle=True),
+            self.MODE_DELETE: Button(10, btn_y + 5*(btn_h + btn_gap), btn_w, btn_h, "Del", toggle=True),
         }
         self.tool_buttons[self.MODE_SELECT].active = True
 
         # Preview button
-        self.preview_button = Button(10, btn_y + 5*(btn_h + btn_gap) + 20, btn_w, btn_h, "Test",
+        self.preview_button = Button(10, btn_y + 6*(btn_h + btn_gap) + 20, btn_w, btn_h, "Test",
                                      color=(60, 100, 80), hover_color=(80, 130, 100))
 
         # Grid toggle button
-        self.grid_button = Button(10, btn_y + 6*(btn_h + btn_gap) + 30, btn_w, 30, "Grid", toggle=True)
+        self.grid_button = Button(10, btn_y + 7*(btn_h + btn_gap) + 30, btn_w, 30, "Grid", toggle=True)
         self.grid_button.active = True
 
         # Property panel input fields (will be positioned in draw)
@@ -787,6 +888,17 @@ class LevelEditor:
                 best_idx = idx
         return best_idx if best_dist <= threshold else None
 
+    def find_conveyor_at(self, pos, threshold=12):
+        """Find a conveyor near the given position."""
+        best_idx = None
+        best_dist = threshold + 1
+        for idx, conv in enumerate(self.conveyors):
+            dist = self.distance_to_segment(pos, conv["start"], conv["end"])
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = idx
+        return best_idx if best_dist <= threshold else None
+
     def is_near_emitter(self, pos, threshold=30):
         """Check if a point is near the emitter."""
         ex, ey = self.emitter["pos"]
@@ -798,6 +910,7 @@ class LevelEditor:
         self.mode = mode
         self.selected_wall = None
         self.selected_platform = None
+        self.selected_conveyor = None
         self.selected_emitter = False
         self.selected_handle = None
         self.dragging_emitter = False
@@ -815,6 +928,7 @@ class LevelEditor:
             level = load_level(path)
             self.walls = list(level.get("walls", []))
             self.platforms = list(level.get("platforms", []))
+            self.conveyors = list(level.get("conveyors", []))
             self.emitter = level.get("emitter", get_default_emitter())
             self.level_name = level.get("name", "level")
             self.current_file = Path(path)
@@ -822,6 +936,7 @@ class LevelEditor:
             self.history.clear()
             self.selected_wall = None
             self.selected_platform = None
+            self.selected_conveyor = None
             self.selected_emitter = False
         except Exception as e:
             print(f"Error loading level: {e}")
@@ -834,7 +949,7 @@ class LevelEditor:
             path = LEVELS_DIR / "untitled.json"
 
         try:
-            save_level(path, self.walls, self.platforms, self.emitter, name=self.level_name)
+            save_level(path, self.walls, self.platforms, self.emitter, self.conveyors, name=self.level_name)
             self.current_file = Path(path)
             self.modified = False
             self.refresh_level_list()
@@ -845,6 +960,7 @@ class LevelEditor:
         """Create a new empty level."""
         self.walls = []
         self.platforms = []
+        self.conveyors = []
         self.emitter = get_default_emitter()
         self.level_name = "untitled"
         self.current_file = None
@@ -890,6 +1006,8 @@ class LevelEditor:
                 self.set_mode(self.MODE_WALL)
             elif event.key == pygame.K_p:
                 self.set_mode(self.MODE_PLATFORM)
+            elif event.key == pygame.K_c:
+                self.set_mode(self.MODE_CONVEYOR)
             elif event.key == pygame.K_e:
                 self.set_mode(self.MODE_EMITTER)
             elif event.key == pygame.K_x:
@@ -898,7 +1016,7 @@ class LevelEditor:
                 self.grid.enabled = not self.grid.enabled
                 self.grid_button.active = self.grid.enabled
             elif event.key == pygame.K_SPACE:
-                self.preview.start(self.walls, self.platforms, self.emitter)
+                self.preview.start(self.walls, self.platforms, self.emitter, self.conveyors)
                 self.mode = self.MODE_PREVIEW
             elif event.key == pygame.K_DELETE:
                 self.delete_selected()
@@ -910,7 +1028,7 @@ class LevelEditor:
                 return True
 
         if self.preview_button.is_clicked(event):
-            self.preview.start(self.walls, self.platforms, self.emitter)
+            self.preview.start(self.walls, self.platforms, self.emitter, self.conveyors)
             self.mode = self.MODE_PREVIEW
             return True
 
@@ -1000,6 +1118,18 @@ class LevelEditor:
             if plat_idx is not None:
                 self.selected_platform = plat_idx
                 self.selected_wall = None
+                self.selected_conveyor = None
+                self.selected_emitter = False
+                self.selected_handle = None
+                self.update_property_fields()
+                return
+
+            # Then check for conveyor
+            conv_idx = self.find_conveyor_at(pos)
+            if conv_idx is not None:
+                self.selected_conveyor = conv_idx
+                self.selected_wall = None
+                self.selected_platform = None
                 self.selected_emitter = False
                 self.selected_handle = None
                 self.update_property_fields()
@@ -1010,6 +1140,7 @@ class LevelEditor:
                 self.selected_emitter = True
                 self.selected_wall = None
                 self.selected_platform = None
+                self.selected_conveyor = None
                 self.selected_handle = None
                 self.dragging_emitter = True
                 self.update_property_fields()
@@ -1018,6 +1149,7 @@ class LevelEditor:
             # Clicked on empty space
             self.selected_wall = None
             self.selected_platform = None
+            self.selected_conveyor = None
             self.selected_emitter = False
             self.selected_handle = None
             self.update_property_fields()
@@ -1039,8 +1171,15 @@ class LevelEditor:
             self.modified = True
             self.selected_platform = len(self.platforms) - 1
             self.selected_wall = None
+            self.selected_conveyor = None
             self.selected_emitter = False
             self.update_property_fields()
+
+        elif self.mode == self.MODE_CONVEYOR:
+            # Start drawing a conveyor (like walls, uses click-drag)
+            self.drawing = True
+            self.draw_start = snapped_pos
+            self.draw_end = snapped_pos
 
         elif self.mode == self.MODE_EMITTER:
             # Move the emitter to clicked position
@@ -1056,7 +1195,7 @@ class LevelEditor:
             self.update_property_fields()
 
         elif self.mode == self.MODE_DELETE:
-            # Try to delete platform first, then wall
+            # Try to delete platform first, then conveyor, then wall
             plat_idx = self.find_platform_at(pos)
             if plat_idx is not None:
                 platform = self.platforms[plat_idx]
@@ -1065,6 +1204,16 @@ class LevelEditor:
                 self.modified = True
                 if self.selected_platform == plat_idx:
                     self.selected_platform = None
+                return
+
+            conv_idx = self.find_conveyor_at(pos)
+            if conv_idx is not None:
+                conveyor = self.conveyors[conv_idx]
+                cmd = DeleteConveyorCommand(conveyor, conv_idx)
+                self.history.execute(cmd, self)
+                self.modified = True
+                if self.selected_conveyor == conv_idx:
+                    self.selected_conveyor = None
                 return
 
             wall_idx = self.find_wall_at(pos)
@@ -1101,20 +1250,35 @@ class LevelEditor:
         self.update_property_fields()
 
     def finish_drawing(self):
-        """Finish drawing a wall."""
+        """Finish drawing a wall or conveyor."""
         if not self.drawing or not self.draw_start or not self.draw_end:
             self.drawing = False
             return
 
-        # Only create wall if it has some length
+        # Only create if it has some length
         if self.distance_to_point(self.draw_start, self.draw_end) > 5:
-            wall = (self.draw_start, self.draw_end)
-            cmd = AddWallCommand(wall)
-            self.history.execute(cmd, self)
-            self.modified = True
-            self.selected_wall = len(self.walls) - 1
-            self.selected_platform = None
-            self.update_property_fields()
+            if self.mode == self.MODE_CONVEYOR:
+                conveyor = {
+                    "start": self.draw_start,
+                    "end": self.draw_end,
+                    "speed": 100.0,
+                }
+                cmd = AddConveyorCommand(conveyor)
+                self.history.execute(cmd, self)
+                self.modified = True
+                self.selected_conveyor = len(self.conveyors) - 1
+                self.selected_wall = None
+                self.selected_platform = None
+                self.update_property_fields()
+            else:
+                wall = (self.draw_start, self.draw_end)
+                cmd = AddWallCommand(wall)
+                self.history.execute(cmd, self)
+                self.modified = True
+                self.selected_wall = len(self.walls) - 1
+                self.selected_platform = None
+                self.selected_conveyor = None
+                self.update_property_fields()
 
         self.drawing = False
         self.draw_start = None
@@ -1128,6 +1292,13 @@ class LevelEditor:
             self.history.execute(cmd, self)
             self.modified = True
             self.selected_platform = None
+            self.update_property_fields()
+        elif self.selected_conveyor is not None:
+            conveyor = self.conveyors[self.selected_conveyor]
+            cmd = DeleteConveyorCommand(conveyor, self.selected_conveyor)
+            self.history.execute(cmd, self)
+            self.modified = True
+            self.selected_conveyor = None
             self.update_property_fields()
         elif self.selected_wall is not None:
             wall = self.walls[self.selected_wall]
@@ -1177,6 +1348,24 @@ class LevelEditor:
             self.prop_fields['ang_vel'] = InputField(prop_x, prop_y + 3*field_gap, field_w, field_h, "Angular Vel")
             self.prop_fields['ang_vel'].set_value(plat['angular_velocity'])
 
+        elif self.selected_conveyor is not None and self.selected_conveyor < len(self.conveyors):
+            conv = self.conveyors[self.selected_conveyor]
+
+            self.prop_fields['conv_start_x'] = InputField(prop_x, prop_y, field_w, field_h, "Start X")
+            self.prop_fields['conv_start_x'].set_value(conv['start'][0])
+
+            self.prop_fields['conv_start_y'] = InputField(prop_x, prop_y + field_gap, field_w, field_h, "Start Y")
+            self.prop_fields['conv_start_y'].set_value(conv['start'][1])
+
+            self.prop_fields['conv_end_x'] = InputField(prop_x, prop_y + 2*field_gap, field_w, field_h, "End X")
+            self.prop_fields['conv_end_x'].set_value(conv['end'][0])
+
+            self.prop_fields['conv_end_y'] = InputField(prop_x, prop_y + 3*field_gap, field_w, field_h, "End Y")
+            self.prop_fields['conv_end_y'].set_value(conv['end'][1])
+
+            self.prop_fields['conv_speed'] = InputField(prop_x, prop_y + 4*field_gap, field_w, field_h, "Speed")
+            self.prop_fields['conv_speed'].set_value(conv['speed'])
+
         elif self.selected_emitter:
             self.prop_fields['emit_x'] = InputField(prop_x, prop_y, field_w, field_h, "X Position")
             self.prop_fields['emit_x'].set_value(self.emitter['pos'][0])
@@ -1223,6 +1412,20 @@ class LevelEditor:
                 )
                 self.platforms[self.selected_platform]['length'] = self.prop_fields['length'].get_float()
                 self.platforms[self.selected_platform]['angular_velocity'] = self.prop_fields['ang_vel'].get_float()
+                self.modified = True
+
+        elif self.selected_conveyor is not None and self.selected_conveyor < len(self.conveyors):
+            conv_keys = ['conv_start_x', 'conv_start_y', 'conv_end_x', 'conv_end_y', 'conv_speed']
+            if all(k in self.prop_fields for k in conv_keys):
+                self.conveyors[self.selected_conveyor]['start'] = (
+                    self.prop_fields['conv_start_x'].get_float(),
+                    self.prop_fields['conv_start_y'].get_float()
+                )
+                self.conveyors[self.selected_conveyor]['end'] = (
+                    self.prop_fields['conv_end_x'].get_float(),
+                    self.prop_fields['conv_end_y'].get_float()
+                )
+                self.conveyors[self.selected_conveyor]['speed'] = self.prop_fields['conv_speed'].get_float()
                 self.modified = True
 
         elif self.selected_emitter:
@@ -1300,7 +1503,7 @@ class LevelEditor:
         self.screen.blit(title_surf, (10, 7))
 
         # Draw shortcuts hint
-        shortcuts = "V:Select  W:Wall  P:Platform  E:Emitter  X:Delete  Space:Test  G:Grid  Ctrl+Z/Y:Undo/Redo"
+        shortcuts = "V:Select  W:Wall  P:Platform  C:Conveyor  E:Emitter  X:Delete  Space:Test  G:Grid"
         shortcuts_surf = self.small_font.render(shortcuts, True, (150, 150, 150))
         self.screen.blit(shortcuts_surf, (200, 9))
 
@@ -1350,6 +1553,56 @@ class LevelEditor:
                 # Draw center point
                 pygame.draw.circle(canvas_surface, (255, 255, 255), (int(cx), int(cy)), 3)
 
+            # Draw conveyors
+            for idx, conv in enumerate(self.conveyors):
+                start = conv["start"]
+                end = conv["end"]
+                speed = conv["speed"]
+                color = SELECTED_COLOR if idx == self.selected_conveyor else CONVEYOR_COLOR
+                pygame.draw.line(canvas_surface, color, start, end, 12)
+
+                # Draw direction arrows along the conveyor
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                length = math.hypot(dx, dy)
+                if length > 0:
+                    # Normalize direction
+                    dir_x = dx / length
+                    dir_y = dy / length
+
+                    # Flip direction for negative speed
+                    if speed < 0:
+                        dir_x = -dir_x
+                        dir_y = -dir_y
+
+                    # Draw arrows every 30 pixels
+                    num_arrows = max(1, int(length / 30))
+                    for i in range(num_arrows):
+                        t = (i + 0.5) / num_arrows
+                        ax = start[0] + t * dx
+                        ay = start[1] + t * dy
+
+                        # Arrow head
+                        arrow_size = 6
+                        perp_x = -dir_y
+                        perp_y = dir_x
+                        tip_x = ax + dir_x * arrow_size
+                        tip_y = ay + dir_y * arrow_size
+                        left_x = ax - dir_x * 2 + perp_x * arrow_size * 0.5
+                        left_y = ay - dir_y * 2 + perp_y * arrow_size * 0.5
+                        right_x = ax - dir_x * 2 - perp_x * arrow_size * 0.5
+                        right_y = ay - dir_y * 2 - perp_y * arrow_size * 0.5
+
+                        pygame.draw.polygon(canvas_surface, (255, 255, 255),
+                                          [(tip_x, tip_y), (left_x, left_y), (right_x, right_y)])
+
+                # Draw handles if selected
+                if idx == self.selected_conveyor:
+                    pygame.draw.circle(canvas_surface, HIGHLIGHT_COLOR,
+                                      (int(start[0]), int(start[1])), 6)
+                    pygame.draw.circle(canvas_surface, HIGHLIGHT_COLOR,
+                                      (int(end[0]), int(end[1])), 6)
+
             # Draw emitter
             self.draw_emitter(canvas_surface)
 
@@ -1377,6 +1630,8 @@ class LevelEditor:
             panel_title = "Wall Properties"
         elif self.selected_platform is not None:
             panel_title = "Platform Properties"
+        elif self.selected_conveyor is not None:
+            panel_title = "Conveyor Properties"
         elif self.selected_emitter:
             panel_title = "Emitter Properties"
         title_surf = self.font.render(panel_title, True, TEXT_COLOR)
@@ -1387,6 +1642,8 @@ class LevelEditor:
             info = f"Wall #{self.selected_wall + 1}"
         elif self.selected_platform is not None:
             info = f"Platform #{self.selected_platform + 1}"
+        elif self.selected_conveyor is not None:
+            info = f"Conveyor #{self.selected_conveyor + 1}"
         elif self.selected_emitter:
             info = "Entry Pipe"
         else:
@@ -1399,10 +1656,11 @@ class LevelEditor:
             field.draw(self.screen)
 
         # Draw stats
-        stats_y = self.height - FILE_BROWSER_HEIGHT - 60
+        stats_y = self.height - FILE_BROWSER_HEIGHT - 75
         stats = [
             f"Walls: {len(self.walls)}",
             f"Platforms: {len(self.platforms)}",
+            f"Conveyors: {len(self.conveyors)}",
             f"Grid: {'On' if self.grid.enabled else 'Off'} ({self.grid.size}px)"
         ]
         for i, stat in enumerate(stats):
